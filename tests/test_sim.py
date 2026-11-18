@@ -2,7 +2,9 @@ import numpy as np
 
 from k2 import layout as L
 from k2 import sim
-from k2.oracle import find_cut, mode_share
+
+from .conftest import synthetic_table
+from k2.oracle import changing, mode_share, predictable, summary
 from k2.plan import categorical_cem
 
 
@@ -49,13 +51,36 @@ def test_goal_test():
     assert not sim.new_achievements(cur, start, start)  # no progress: never a success
 
 
-def test_oracle_mode_and_cut():
+def test_oracle_mode_lines_and_changing():
     values = np.array([[[1], [1], [2], [1]]])  # (n=1, R=4, F=1)
     p, mode = mode_share(values)
     assert p[0, 0] == 0.75 and mode[0, 0] == 1
-    p = np.concatenate([np.ones(100), np.full(30, 31 / 32), np.full(2, 20 / 32), np.full(20, 10 / 32)])
-    cut, hist = find_cut(p, 32)
-    assert hist[32] == 100 and 16 / 32 <= cut < 31 / 32 and hist[round(cut * 32)] == 0
+    p = np.array([1.0, 63 / 64, 58 / 64, 57 / 64, 48 / 64, 47 / 64], np.float32)
+    assert predictable(p, 1.0).tolist() == [True, False, False, False, False, False]
+    assert predictable(p, 0.9).tolist() == [True, True, True, False, False, False]
+    assert predictable(p, 0.75).tolist() == [True, True, True, True, True, False]
+    # changing: the mode differs from the start value, or the replays disagree
+    table = synthetic_table()
+    rows = np.array([0, 1, 2])
+    start = L.token_values(L.take(table, rows))
+    mode = start.copy()
+    mode[0, 0] += 1  # a deterministic change
+    p = np.ones(start.shape, np.float32)
+    p[1, 5] = 0.5  # a random factor whose mode is the start value
+    t = {"rows": rows, "mode": mode, "p": p}
+    chg = changing(t, table)
+    assert chg.sum() == 2 and chg[0, 0] and chg[1, 5]
+
+
+def test_summary_text():
+    table = synthetic_table()
+    rows = np.arange(0, 20)
+    n = len(rows)
+    mode = L.token_values(L.take(table, rows + 2))
+    t = {"k": np.int64(2), "split": "val", "n_keys": np.int64(64), "rows": rows, "mode": mode,
+         "p": np.ones((n, L.NUM_TOKENS), np.float32), "p_true": np.ones((n, L.NUM_TOKENS), np.float32)}  # fmt: skip
+    text = summary(t, table)
+    assert "| mobs" in text and "| daylight" in text and "all agreed" in text and "p >= 0.75" in text
 
 
 def test_categorical_cem_finds_the_minimum():

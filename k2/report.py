@@ -35,7 +35,9 @@ COMMON = [
     "One seed per run.",
     "Held-out frames are the val worlds (all sources); test is kept for the planning headline.",
     "The fresh decoder (2000 steps on 65k train frames) gives a lower bound on what the latent holds.",
-    "The oracle's cut is read from the data (the least-populated level of p in [0.5, 1)), not fixed in advance.",
+    "Predictable means the oracle's replays agree, at three lines (all agreed, 0.9, 0.75). All agreed is noisy at its "
+    "edge: a factor that deviates in a few percent of the replays can still pass. The shares cover the factors that "
+    "change; tiles are egocentric, so at small k most tile changes are the view shifting, not game events.",
 ]
 SUMMARY_KEYS = ("rare", "blocks", "mobs", "items", "vitals")
 
@@ -94,21 +96,9 @@ def write_report(run_dir) -> str:
 
     lines += ["", "## 2. Kept against predictable (last step)", ""]
     if last.get("kept"):
-        lines += ["Share of the predictable factors kept / share of the unpredictable factors kept (counts in brackets).", ""]
-        head = ["class", "predictable kept", "unpredictable kept"] + ([f"{ctl_name}: pred / unpred"] if ctl_last and ctl_last.get("kept") else [])
-        lines += ["| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
-        kept = last["kept"]
-        for n in ["all"] + L.class_order([c for c in kept if c != "all"]):
-            k = kept[n]
-            row = [n, f"{_f(k['share_pred_kept'])} ({k['pred_kept'] + k['pred_dropped']})",
-                   f"{_f(k['share_unpred_kept'])} ({k['unpred_kept'] + k['unpred_dropped']})"]  # fmt: skip
-            if len(head) == 4:
-                c = ctl_last["kept"].get(n)
-                row.append(f"{_f(c['share_pred_kept'])} / {_f(c['share_unpred_kept'])}" if c else "-")
-            lines.append("| " + " | ".join(row) + " |")
-        lines += ["", "Over the checkpoints (all factors): " + ", ".join(
-            f"step {s} {_f(res[s]['kept']['all']['share_pred_kept'])} / {_f(res[s]['kept']['all']['share_unpred_kept'])}"
-            for s in steps if res[s].get("kept")) + "."]  # fmt: skip
+        lines += kept_lines(last["kept"], ctl_last["kept"] if ctl_last and ctl_last.get("kept") else None, ctl_name)
+        lines += ["", "Over the checkpoints (all changing factors, all agreed): " + ", ".join(
+            f"step {s} {_pair(res[s]['kept']['all']['changing']['by_line']['1'])}" for s in steps if res[s].get("kept")) + "."]  # fmt: skip
     else:
         lines.append(f"No oracle table for k = {cfg.k} (`python -m k2.oracle --k {cfg.k}` on the Mac).")
 
@@ -141,6 +131,50 @@ def write_report(run_dir) -> str:
     if plan.exists():
         lines += ["", "## 5. Planning", "", *planning_lines(json.loads(plan.read_text()))]
     return _write(run_dir, lines, cfg)
+
+
+LINE_NAMES = {"1": "all agreed", "0.9": "p >= 0.9", "0.75": "p >= 0.75"}
+
+
+def _share(kept: int, n: int) -> str:
+    return "-" if n == 0 else f"{kept / n:.2f} ({n})"
+
+
+def _pair(c: dict) -> str:
+    """Share of the predictable factors kept / of the unpredictable ones kept, counts in brackets."""
+    return f"{_share(c['pred_kept'], c['pred_kept'] + c['pred_dropped'])} / {_share(c['unpred_kept'], c['unpred_kept'] + c['unpred_dropped'])}"
+
+
+def kept_lines(kept: dict, ctl: dict | None, ctl_name: str | None) -> list[str]:
+    """Kept against predictable per kind and per class: the unchanged factors kept, the changing ones kept, and per line of
+    the oracle the share of the predictable / unpredictable changing factors kept (`*`: fewer than 30 changing)."""
+    from .oracle import FEW
+
+    lines = [
+        f"Oracle of {kept['n_keys']} fresh-key replays. Changing = some replay ends elsewhere than the start frame; "
+        "the unchanged factors are deterministic and listed apart (kept share, count). For the changing ones, per line: "
+        "predictable kept / unpredictable kept, counts in brackets; the main line is all replays agreed, the other two "
+        f"check that nothing depends on it. `*`: fewer than {FEW} changing factors, read with care.",
+    ]
+    for title, key, order in (("kind", "kinds", list(L.KINDS)), ("class", "classes", None)):
+        group = kept[key]
+        names = [n for n in order if n in group] if order else L.class_order(list(group))
+        names = ["all"] + names if key == "kinds" else names
+        get = lambda d, n: d["all"] if n == "all" else d[key][n]  # noqa: E731
+        head = [title, "unchanged kept", "changing kept"] + [LINE_NAMES[x] for x in kept["lines"]]
+        if ctl:
+            head.append(f"{ctl_name}, all agreed")
+        lines += ["", "| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
+        for n in names:
+            g = get(kept, n)
+            row = [n + (" *" if g["changing"]["n"] < FEW else ""), _share(g["unchanged"]["kept"], g["unchanged"]["n"]),
+                   _share(g["changing"]["kept"], g["changing"]["n"])]  # fmt: skip
+            row += [_pair(g["changing"]["by_line"][x]) for x in kept["lines"]]
+            if ctl:
+                c = get(ctl, n) if n == "all" or n in ctl[key] else None
+                row.append(_pair(c["changing"]["by_line"]["1"]) if c else "-")
+            lines.append("| " + " | ".join(row) + " |")
+    return lines
 
 
 def planning_lines(p: dict) -> list[str]:

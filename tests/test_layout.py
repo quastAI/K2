@@ -32,3 +32,14 @@ def test_token_values_and_classes():
         covered |= m
     assert covered.all()  # every factor belongs to a class
     assert len(L.TOKEN_NAMES) == L.NUM_TOKENS
+
+
+def test_kinds():
+    c = L.take(synthetic_table(), slice(0, 10))
+    kinds = L.kind_masks(c)
+    assert set(kinds) == set(L.KINDS)
+    assert kinds["items"][:, L.ITEM_TOKENS].all() and not kinds["items"][:, L.TILE_TOKENS].any()
+    assert kinds["daylight"].sum() == 10 and kinds["daylight"][:, L.LIGHT_TOKEN].all()
+    assert kinds["player"][:, [L.FACING_TOKEN, L.SLEEP_TOKEN]].all() and not kinds["player"][:, L.LIGHT_TOKEN].any()
+    every = np.logical_or.reduce(list(kinds.values()))
+    assert every.all()  # every factor is of some kind

@@ -75,6 +75,21 @@ LIGHT_TOLERANCE = 0.05  # a decoded light level within this counts as correct
 # the rare classes of the readouts (the sapling, once placed, is the block `plant`)
 RARE_BLOCKS = ["coal", "iron", "diamond", "lava", "crafting_table", "furnace", "plant"]
 
+# kinds of things: groups of the readout classes (a tile counts for its block type and for each mob on it). Light is
+# its own kind: it changes every step (the day clock) and would drown the player's own state.
+KINDS = {
+    "mobs": MOBS,
+    "ores": ["coal", "iron", "diamond"],
+    "lava": ["lava"],
+    "stations": ["crafting_table", "furnace"],
+    "plants": ["plant", "ripe_plant"],
+    "terrain": ["grass", "water", "stone", "sand", "path", "tree", "wood", "invalid", "out_of_bounds"],
+    "items": [f"item_{x}" for x in ITEMS],
+    "vitals": VITALS,
+    "player": ["facing", "sleeping"],
+    "daylight": ["light"],
+}
+
 FIELDS = ("block", "mob", "item", "vital", "facing", "light", "sleep")
 _MOB_BITS = 1 << np.arange(NUM_MOBS)
 
@@ -171,3 +186,14 @@ def class_order(names) -> list[str]:
     """Readout classes in report order: the rare ones first, then the other blocks, the rest as given."""
     rare = [n for n in RARE_BLOCKS + MOBS if n in names]
     return rare + [n for n in names if n not in rare]
+
+
+def kind_masks(c: dict) -> dict[str, np.ndarray]:
+    """Boolean masks (n, 82) of the factors of every kind (`KINDS`) in the true frames `c`."""
+    classes = factor_classes(c)
+    out = {}
+    for kind, members in KINDS.items():
+        masks = [classes[m] for m in members if m in classes]
+        if masks:
+            out[kind] = np.logical_or.reduce(masks)
+    return out

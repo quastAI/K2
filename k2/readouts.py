@@ -4,8 +4,9 @@
    class-balanced loss, scored on held-out frames (val) per class: recall per block type and mob, balanced accuracy
    over the values of each item, vital, facing and sleeping, light within a tolerance.
 2. Kept against predictable: on the oracle's frames (`oracle_k<k>.npz`), per factor of the outcome frame, kept = D'
-   decodes it correctly from z, predictable = oracle p above the cut. A 2 x 2 table per class; the headlines are the
-   share of predictable factors kept and the share of unpredictable factors kept.
+   decodes it correctly from z, predictable = the oracle's p at a line (all replays agreed; 0.9 and 0.75 as checks).
+   A 2 x 2 table per kind and per class for the factors that change; the ones that do not change are reported apart
+   (kept count only). The headlines are the share of predictable factors kept and the share of unpredictable ones.
 3. Prediction: per class, the error of D'(z^_{j+h}) after an H-step rollout, over the error of copying the last
    context frame; also the error of D'(z_{j+h}) (the decoder's own floor) and the latent error over copying.
 4. Geometry: along expert paths of H level-2 steps, the rank correlation of ||z_j - z_goal|| with the steps to go,
@@ -28,7 +29,7 @@ from .cache import load
 from .data import Frames
 from .losses import token_losses
 from .model import Decoder, LinearDecoder
-from .oracle import load_oracle
+from .oracle import LINES, changing, load_oracle, predictable
 from .train import limit_threads, load_config, load_model
 
 
@@ -149,22 +150,37 @@ def class_scores(pred: dict, f: dict) -> dict:
     return {"classes": s, "summary": summary}
 
 
+def count_2x2(kept: np.ndarray, pred: np.ndarray, mask: np.ndarray) -> dict:
+    """Kept against predictable over the factors in `mask`."""
+    return {
+        "pred_kept": int((mask & pred & kept).sum()), "pred_dropped": int((mask & pred & ~kept).sum()),
+        "unpred_kept": int((mask & ~pred & kept).sum()), "unpred_dropped": int((mask & ~pred & ~kept).sum()),
+    }  # fmt: skip
+
+
 def kept_vs_predictable(encoder, dec, val: Frames, oracle: dict) -> dict:
-    """The 2 x 2 table per class on the oracle's outcome frames."""
-    rows = torch.as_tensor(oracle["rows"] + int(oracle["k"]))
-    f = val.frames(rows)
-    kept = correct(predicted(decode(dec, encode(encoder, val, rows))), f)
-    pred = oracle["p"] > float(oracle["cut"])
-    out = {}
-    classes = L.factor_classes(L.take(val.table, rows.numpy()))
-    classes["all"] = np.ones_like(kept)
-    for name, m in classes.items():
-        pk, pd = int((m & pred & kept).sum()), int((m & pred & ~kept).sum())
-        uk, ud = int((m & ~pred & kept).sum()), int((m & ~pred & ~kept).sum())
-        out[name] = {"pred_kept": pk, "pred_dropped": pd, "unpred_kept": uk, "unpred_dropped": ud,
-                     "share_pred_kept": pk / max(pk + pd, 1) if pk + pd else None,
-                     "share_unpred_kept": uk / max(uk + ud, 1) if uk + ud else None}  # fmt: skip
-    return out
+    """Kept against predictable on the oracle's outcome frames, per kind and per class, for the factors that change and
+    (apart) the ones that do not. Kept: D'(z) decodes the factor of the outcome frame correctly. Per line of the
+    oracle (`LINES`, keys "1", "0.9", "0.75") the 2 x 2 counts of the changing factors; the unchanged ones are
+    deterministic by definition, so only their kept count is given."""
+    k = int(oracle["k"])
+    rows = torch.as_tensor(oracle["rows"] + k)
+    kept = correct(predicted(decode(dec, encode(encoder, val, rows))), val.frames(rows))
+    chg = changing(oracle, val.table)
+    pred = {f"{line:g}": predictable(oracle["p"], line) for line in LINES}
+    c = L.take(val.table, oracle["rows"] + k)
+
+    def stats(mask):
+        still, moving = mask & ~chg, mask & chg
+        return {"unchanged": {"n": int(still.sum()), "kept": int((still & kept).sum())},
+                "changing": {"n": int(moving.sum()), "kept": int((moving & kept).sum()),
+                             "by_line": {line: count_2x2(kept, p, moving) for line, p in pred.items()}}}  # fmt: skip
+
+    return {
+        "lines": list(pred), "n_keys": int(oracle["n_keys"]), "all": stats(np.ones_like(kept)),
+        "kinds": {n: stats(m) for n, m in L.kind_masks(c).items()},
+        "classes": {n: stats(m) for n, m in L.factor_classes(c).items()},
+    }  # fmt: skip
 
 
 @torch.no_grad()

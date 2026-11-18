@@ -2,7 +2,7 @@ import json
 
 import numpy as np
 
-from k2 import report
+from k2 import layout, report
 from k2.readouts import run_readouts
 from k2.train import Config, read_log, train
 
@@ -46,3 +46,36 @@ def test_e3_ramp_starts_saves_and_resumes(cache_dir, tmp_path):
     run_readouts(cfg.out, "cpu", decoder_steps=2, n_train=64, n_eval=64, horizon=2)
     assert set(json.loads((tmp_path / "E3" / "readouts.json").read_text())) == {"0", "3", "4", "6", "8"}
     assert "plateaued" in report.write_report(cfg.out)
+
+
+def test_kept_against_predictable_counts_and_report(cache_dir, tmp_path):
+    """The 2 x 2 per kind and class, from a synthetic oracle: counts add up, unchanged apart, the report prints them."""
+    import torch
+
+    from k2.cache import load
+    from k2.data import Frames
+    from k2.model import Decoder, Encoder
+    from k2.readouts import kept_vs_predictable
+    from k2.report import kept_lines
+
+    val = Frames(load("val", cache_dir))
+    rows = np.arange(0, 60)
+    start = layout.token_values(layout.take(val.table, rows))
+    rng = np.random.default_rng(0)
+    p = np.where(rng.random(start.shape) < 0.3, rng.choice([0.5, 0.8, 0.95], start.shape), 1.0).astype(np.float32)
+    mode = np.where(rng.random(start.shape) < 0.3, start + 1, start)
+    oracle = {"k": np.int64(1), "n_keys": np.int64(64), "rows": rows, "p": p, "mode": mode}
+    torch.manual_seed(0)
+    enc, dec = Encoder(32, 1, 2, 2, 16, 32).eval(), Decoder(32, 32, 1, 2).eval()
+    out = kept_vs_predictable(enc, dec, val, oracle)
+    assert out["lines"] == ["1", "0.9", "0.75"]
+    chg = (mode != start) | (p < 1)
+    a = out["all"]
+    assert a["changing"]["n"] == chg.sum() and a["unchanged"]["n"] == (~chg).sum()
+    for line, c in a["changing"]["by_line"].items():
+        assert sum(c.values()) == chg.sum()
+    one = a["changing"]["by_line"]["1"]
+    assert one["pred_kept"] + one["pred_dropped"] == ((p == 1) & chg).sum()
+    assert sum(g["changing"]["n"] for g in out["kinds"].values()) >= chg.sum()  # a tile counts for its block and mobs
+    text = "\n".join(kept_lines(out, out, "E1"))
+    assert "| kind |" in text and "| class |" in text and "E1, all agreed" in text and "all agreed" in text
