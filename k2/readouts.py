@@ -29,7 +29,7 @@ from .data import Frames
 from .losses import token_losses
 from .model import Decoder, LinearDecoder
 from .oracle import load_oracle
-from .train import checkpoint_steps, limit_threads, load_config, load_model
+from .train import limit_threads, load_config, load_model
 
 
 @torch.no_grad()
@@ -253,9 +253,9 @@ def run_readouts(run_dir, device=None, decoder_steps=2000, n_train=65536, n_eval
     path = run_dir / "readouts.json"
     results = json.loads(path.read_text()) if path.exists() else {}
     frames = (Frames(load("train", cfg.cache), device), Frames(load("val", cfg.cache), device))
-    for step in checkpoint_steps(cfg):
-        ckpt = run_dir / f"ckpt_{step:06d}.pt"
-        if str(step) in results or not ckpt.exists():
+    for ckpt in sorted(run_dir.glob("ckpt_*.pt")):  # E3's ramp checkpoints fall between the configured steps
+        step = int(ckpt.stem.split("_")[1])
+        if str(step) in results:
             continue
         results[str(step)] = readout_checkpoint(ckpt, cfg.cache, device, decoder_steps, n_train, n_eval, horizon,
                                                 frames)  # fmt: skip

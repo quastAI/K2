@@ -18,6 +18,7 @@ ROLE = {
     "E0": "capacity check: can this encoder hold every factor, rare ones included? (autoencoder only)",
     "E1": "pruning reference: prediction with the gradient through the target, + SIGReg (A3 analogue)",
     "E2": "E1 with a detached target (A4 analogue)",
+    "E3": "E2 until the predictor plateaus on every latent dimension, then the target's gradient ramps up to E1's",
 }
 NOT_SHOWN = {
     "E0": "E0 has no predictor: it says nothing about what a predictive loss keeps, only what this encoder can hold "
@@ -26,6 +27,9 @@ NOT_SHOWN = {
     "that weight; E2 separates only the first.",
     "E2": "One SIGReg weight (0.1). Keeping content with a detached target does not mean it is kept for the right "
     "reason: the kept-against-predictable table says whether what is kept is predictable.",
+    "E3": "One plateau rule (window, tolerance) and one ramp length. A plateau of the training error on every dimension "
+    "does not mean the latent holds everything it should; and if the ramp starts late, the steps after it may be too "
+    "few to show whether the target path then prunes as in E1.",
 }
 COMMON = [
     "One seed per run.",
@@ -59,9 +63,18 @@ def write_report(run_dir) -> str:
         "",
         f"Role: {ROLE[cfg.variant]}. {cfg.steps} steps, batch {cfg.batch}, sources {list(cfg.sources)}.",
     ]
+    if cfg.variant == "E3":
+        ramp = run_dir / "ramp.json"
+        rule = f"every dimension improving by less than {cfg.plateau_tol} over {cfg.plateau_window} steps"
+        if ramp.exists():
+            r = json.loads(ramp.read_text())
+            lines += ["", f"Target-gradient ramp: the predictor plateaued ({rule}) at step {r['trigger']}; the gradient "
+                      f"through the target rises from 0 to 1 until step {r['full']}."]  # fmt: skip
+        else:
+            lines += ["", f"Target-gradient ramp: never started ({rule}): this run is E2."]
     if (run_dir / "log.csv").exists():
         log = read_log(run_dir)
-        keys = [k for k in ("loss", "pred_over_copy", "recon", "sigreg", "z_std") if k in log]  # fmt: skip
+        keys = [k for k in ("loss", "pred_over_copy", "recon", "sigreg", "target_grad", "plateau_share", "z_std") if k in log]  # fmt: skip
         lines += ["", "Training, last logged step " + str(int(log["step"][-1])) + ": "
                   + ", ".join(f"{k} {_f(log[k][-1])}" for k in keys) + "."]  # fmt: skip
     if not steps:

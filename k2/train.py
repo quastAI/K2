@@ -1,7 +1,8 @@
 """Training of one variant: Adam, linear warmup then a constant learning rate, batch 256.
 
 The run directory holds `config.json`, `log.csv` (every `log_every` steps), the checkpoints `ckpt_<step>.pt` at the
-steps in `checkpoints` and at the end, and `last.pt` (every `save_every` steps; a restart resumes from it).
+steps in `checkpoints` and at the end, and `last.pt` (every `save_every` steps; a restart resumes from it). E3 also
+writes a checkpoint where its target-gradient ramp starts and where it ends, and `ramp.json` once it has started.
 
     python -m k2.train --variant E1 --k 1 --steps 8000 --out runs/E1_k1
 """
@@ -22,10 +23,10 @@ import torch
 
 from .cache import CACHE_DIR, load
 from .data import Frames
-from .losses import SIGReg, variant_loss
+from .losses import SIGReg, TargetRamp, variant_loss
 from .model import World
 
-VARIANTS = ("E0", "E1", "E2")
+VARIANTS = ("E0", "E1", "E2", "E3")
 
 
 @dataclass
@@ -51,6 +52,10 @@ class Config:
     # losses
     sigreg_weight: float = 0.1
     sigreg_proj: int = 1024
+    # E3: the target-gradient ramp (losses.TargetRamp)
+    plateau_window: int = 250
+    plateau_tol: float = 0.01
+    ramp_steps: int = 1000
     # data: all sources (0 expert, 3 early checkpoint), as AAC's level 1; an open decision
     sources: tuple = (0, 3)
     checkpoints: tuple = (0, 100, 300, 1000, 3000)
@@ -117,6 +122,7 @@ def train(cfg: Config) -> Path:
     pool = frames.starts(cfg.k, cfg.context, cfg.sources)
     model = World(cfg).to(device)
     sigreg = SIGReg(num_proj=cfg.sigreg_proj).to(device)
+    ramp = TargetRamp(cfg.plateau_window, cfg.plateau_tol, cfg.ramp_steps, cfg.warmup) if cfg.variant == "E3" else None
     opt = torch.optim.Adam(model.parameters(), lr=cfg.lr)
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: min(1.0, (s + 1) / max(cfg.warmup, 1)))
     step = 0
@@ -126,6 +132,8 @@ def train(cfg: Config) -> Path:
         opt.load_state_dict(blob["opt"])
         sched.load_state_dict(blob["sched"])
         gen.set_state(blob["gen"])
+        if ramp is not None:
+            ramp.load_state_dict(blob["ramp"])
         step = blob["step"]
         print(f"resumed at step {step}")
     keep = set(checkpoint_steps(cfg))
@@ -138,14 +146,16 @@ def train(cfg: Config) -> Path:
 
     try:
         while True:
-            if step in keep and not (out / f"ckpt_{step:06d}.pt").exists():
+            marks = keep | (ramp.marks() if ramp else set())
+            if step in marks and step <= cfg.steps and not (out / f"ckpt_{step:06d}.pt").exists():
                 save(out / f"ckpt_{step:06d}.pt")
             if step >= cfg.steps:
                 break
             model.train()
             idx = torch.randint(len(pool), (cfg.batch,), device=device, generator=gen)
             f, m = frames.steps(pool[idx], cfg.k, cfg.context)
-            loss, logs = variant_loss(model, f, m, cfg, sigreg)
+            g = ramp.value(step) if ramp else None
+            loss, logs, err = variant_loss(model, f, m, cfg, sigreg, g)
             if not math.isfinite(loss.item()):
                 raise FloatingPointError(f"loss is {loss.item()} at step {step}")
             opt.zero_grad(set_to_none=True)
@@ -153,6 +163,11 @@ def train(cfg: Config) -> Path:
             opt.step()
             sched.step()
             step += 1
+            if ramp is not None:
+                if ramp.update(step, err):
+                    (out / "ramp.json").write_text(json.dumps({"trigger": step, "full": step + cfg.ramp_steps}))
+                    print(f"E3: the predictor plateaued on every dimension at step {step}; the target's gradient ramps up")
+                logs["plateau_share"] = ramp.plateau_share
             if step % cfg.log_every == 0 or step == 1:
                 row = {"step": step, "loss": loss.item(), "lr": sched.get_last_lr()[0],
                        "sec": round(time.time() - t0, 1), **logs}  # fmt: skip
@@ -164,7 +179,8 @@ def train(cfg: Config) -> Path:
                 log_file.flush()
             if step % cfg.save_every == 0 or step == cfg.steps:
                 torch.save({"model": model.state_dict(), "opt": opt.state_dict(), "sched": sched.state_dict(),
-                            "gen": gen.get_state(), "step": step}, out / "last.pt")  # fmt: skip
+                            "gen": gen.get_state(), "step": step,
+                            "ramp": ramp.state_dict() if ramp else None}, out / "last.pt")  # fmt: skip
     finally:
         log_file.close()
     print(f"{cfg.variant}: {cfg.steps} steps in {time.time() - t0:.0f} s -> {out}")
