@@ -1,4 +1,4 @@
-"""Training of one variant: Adam, linear warmup then a constant learning rate, batch 256.
+"""Training of one variant: Adam, linear warmup then a constant learning rate, batch 512.
 
 The run directory holds `config.json`, `log.csv` (every `log_every` steps), the checkpoints `ckpt_<step>.pt` at the
 steps in `checkpoints` and at the end, and `last.pt` (every `save_every` steps; a restart resumes from it). E3 also
@@ -34,8 +34,8 @@ class Config:
     variant: str = "E0"
     k: int = 1  # stride
     context: int = 1  # C
-    steps: int = 8000  # one epoch at k = 1 is about 7.8k steps
-    batch: int = 256
+    steps: int = 8000  # one epoch at k = 1 (about 2M level-2 steps) is about 3.9k steps of batch 512
+    batch: int = 512
     lr: float = 3e-4
     warmup: int = 500
     # encoder
@@ -50,7 +50,9 @@ class Config:
     pred_layers: int = 3
     dec_layers: int = 2
     # losses
-    sigreg_weight: float = 0.1
+    # AAC's 0.09 at batch 128, scaled to batch 512: SIGReg's statistic grows with the batch, the prediction loss is a
+    # mean, so the weight scales as 1 / batch to keep AAC's balance (change it with the batch)
+    sigreg_weight: float = 0.0225
     sigreg_proj: int = 1024
     # E3: the target-gradient ramp (losses.TargetRamp)
     plateau_window: int = 250

@@ -35,7 +35,7 @@ Every run of minutes or more waits for a go-ahead. The times are estimates unles
    - `.venv/bin/python -m k2.cache`: train, val and test into `data/cache`. About 1 to 2 minutes, about 450 MB (train about 300 MB).
    - `.venv/bin/python -m k2.sim --split val`: the guard (true-key replay reproduces the stored frames). About 10 s.
 1. **Mac: the oracle table.** `.venv/bin/python -m k2.oracle --k 1 8`: 2048 val frames x 32 keys, about a minute (the simulator does about 24k steps/s here, measured). Writes `data/cache/oracle_k{1,8}.{npz,md}`.
-2. **Pod: E0**, then 3. **E1 against E2**, then **E3 against E2** (E2 with the target's gradient ramped up once the predictor plateaus on every dimension), at k = 1: the notebooks, one epoch (8000 steps) each, about 3 to 5 minutes of training plus readouts on an A40. Upload `data/cache/{train,val,val_full}.npz` and `oracle_k*.npz` first.
+2. **Pod: E0**, then 3. **E1 against E2**, then **E3 against E2** (E2 with the target's gradient ramped up once the predictor plateaus on every dimension), at k = 1: the notebooks, 8000 steps of batch 512 each (about two epochs), about 6 to 10 minutes of training plus readouts on an A40 (an estimate). Upload `data/cache/{train,val,val_full}.npz` and `oracle_k*.npz` first.
 5. **k = 8:** the same notebooks with `K = 8`. Planning (`python -m k2.plan runs/<run> --split val`, run by the notebook) restores the task starts from `val_full.npz` and needs `achievements` from `val.npz`; its time is still to be measured (`python -m k2.plan --speed` gives the simulator's rate on a machine).
 
 The JAX processes on a pod run without `LD_LIBRARY_PATH` (the planning cell strips it).

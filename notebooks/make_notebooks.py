@@ -38,7 +38,7 @@ CONFIG = """VARIANT = "{id}"
 CONTROL = {control!r}  # the variant this run is read against (E0 is the reference for all)
 K = 1  # stride; step 5 of the order of work runs K = 8
 CONTEXT = 1  # C
-STEPS = 8000  # about one epoch at K = 1
+STEPS = 8000  # about two epochs at K = 1 (batch 512)
 CACHE = ROOT / "data/cache"  # the local disk
 RUNS = ROOT / "runs"  # on a pod: a folder on the volume, e.g. Path("/workspace/K2/runs")
 PLAN = K > 1  # level-2 planning, with the executor check (oracle subgoals)

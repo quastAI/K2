@@ -23,9 +23,9 @@ ROLE = {
 NOT_SHOWN = {
     "E0": "E0 has no predictor: it says nothing about what a predictive loss keeps, only what this encoder can hold "
     "under reconstruction. Its scores are the reference for the other variants, not a pass mark.",
-    "E1": "One SIGReg weight (0.1). A loss of content here can come from the target path or from its interplay with "
+    "E1": "One SIGReg weight (0.0225, AAC's 0.09 scaled from batch 128 to 512; not tuned for this encoder). A loss of content here can come from the target path or from its interplay with "
     "that weight; E2 separates only the first.",
-    "E2": "One SIGReg weight (0.1). Keeping content with a detached target does not mean it is kept for the right "
+    "E2": "One SIGReg weight (0.0225, as E1). Keeping content with a detached target does not mean it is kept for the right "
     "reason: the kept-against-predictable table says whether what is kept is predictable.",
     "E3": "One plateau rule (window, tolerance) and one ramp length. A plateau of the training error on every dimension "
     "does not mean the latent holds everything it should; and if the ramp starts late, the steps after it may be too "
