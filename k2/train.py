@@ -25,7 +25,7 @@ from .data import Frames
 from .losses import SIGReg, variant_loss
 from .model import World
 
-VARIANTS = ("E0", "E1", "E2", "E3", "E4")
+VARIANTS = ("E0", "E1", "E2")
 
 
 @dataclass
@@ -51,8 +51,6 @@ class Config:
     # losses
     sigreg_weight: float = 0.1
     sigreg_proj: int = 1024
-    gate_floor: float = 0.1
-    gate_beta: float = 1.0
     # data: all sources (0 expert, 3 early checkpoint), as AAC's level 1; an open decision
     sources: tuple = (0, 3)
     checkpoints: tuple = (0, 100, 300, 1000, 3000)

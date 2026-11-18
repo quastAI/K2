@@ -14,7 +14,7 @@ The compact form keeps the same frame exactly in 148 bytes:
     light   (n,)    float32
     sleep   (n,)    uint8
 
-Tokens (the factors of the readouts and the gate) are in this order: 63 tiles, 12 items, 4 vitals, facing, light,
+Tokens (the factors of the oracle and the readouts) are in this order: 63 tiles, 12 items, 4 vitals, facing, light,
 sleeping (82).
 """
 

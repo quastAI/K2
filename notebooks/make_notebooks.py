@@ -1,4 +1,4 @@
-"""Write notebooks/E0.ipynb .. E4.ipynb from one template; they differ only in the configuration cell.
+"""Write notebooks/E0.ipynb .. E2.ipynb from one template; they differ only in the configuration cell.
 
     python notebooks/make_notebooks.py
 """
@@ -11,14 +11,12 @@ VARIANTS = {  # id: (control, title)
     "E0": (None, "capacity check (autoencoder only)"),
     "E1": ("E2", "prediction with the gradient through the target + SIGReg (A3 analogue)"),
     "E2": ("E1", "prediction with a detached target + SIGReg (A4 analogue)"),
-    "E3": ("E4", "detached prediction + decoded prediction + reconstruction (Sieve stage 1 analogue)"),
-    "E4": ("E3", "E3 with the reconstruction gated per token (V5's relative gate)"),
 }
 
 INTRO = """# {id}: {title}
 
 Runs this variant end to end: data check, training, readouts, report, and level-2 planning at k > 1. The notebooks
-E0 to E4 share the code in `k2/` and differ only in the configuration cell (`notebooks/make_notebooks.py` writes them).
+E0 to E2 share the code in `k2/` and differ only in the configuration cell (`notebooks/make_notebooks.py` writes them).
 
 **Before running on a pod:** clone to `/root/K2`, make the venv there, upload the cache built on the Mac
 (`data/cache`: `train.npz`, `val.npz`, `val_full.npz`, `oracle_k*.npz`) to `/root/K2/data/cache`, and point `RUNS` at

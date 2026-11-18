@@ -18,8 +18,6 @@ ROLE = {
     "E0": "capacity check: can this encoder hold every factor, rare ones included? (autoencoder only)",
     "E1": "pruning reference: prediction with the gradient through the target, + SIGReg (A3 analogue)",
     "E2": "E1 with a detached target (A4 analogue)",
-    "E3": "keep everything: detached prediction + decoded prediction + reconstruction (Sieve stage 1 analogue)",
-    "E4": "E3 with the reconstruction gated per token (V5's relative gate)",
 }
 NOT_SHOWN = {
     "E0": "E0 has no predictor: it says nothing about what a predictive loss keeps, only what this encoder can hold "
@@ -28,10 +26,6 @@ NOT_SHOWN = {
     "that weight; E2 separates only the first.",
     "E2": "One SIGReg weight (0.1). Keeping content with a detached target does not mean it is kept for the right "
     "reason: the kept-against-predictable table says whether what is kept is predictable.",
-    "E3": "E3 keeps everything by construction: it says nothing about selection, only what the predictor foresees "
-    "when nothing is dropped.",
-    "E4": "One floor and beta (0.1, 1). A factor shut by the gate may be unpredictable or only not yet predicted at "
-    "this step count; the oracle table separates the two only for the factors it scores.",
 }
 COMMON = [
     "One seed per run.",
@@ -67,7 +61,7 @@ def write_report(run_dir) -> str:
     ]
     if (run_dir / "log.csv").exists():
         log = read_log(run_dir)
-        keys = [k for k in ("loss", "pred_over_copy", "recon", "decoded_pred", "gate_mean", "gate_shut", "sigreg", "z_std") if k in log]  # fmt: skip
+        keys = [k for k in ("loss", "pred_over_copy", "recon", "sigreg", "z_std") if k in log]  # fmt: skip
         lines += ["", "Training, last logged step " + str(int(log["step"][-1])) + ": "
                   + ", ".join(f"{k} {_f(log[k][-1])}" for k in keys) + "."]  # fmt: skip
     if not steps:

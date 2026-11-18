@@ -17,7 +17,7 @@ Methods:
 The executor: CEM over k actions; each candidate is rolled out under several fresh keys and scored by
 ||enc(x_sim) - target|| averaged over the keys; the best sequence is carried out in the real environment.
 
-    python -m k2.plan runs/E3_k8 --split val          # writes <run>/planning.json
+    python -m k2.plan runs/E2_k8 --split val          # writes <run>/planning.json
     python -m k2.plan --speed                          # simulator steps per second (seconds)
 """
 

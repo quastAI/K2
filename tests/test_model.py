@@ -3,7 +3,7 @@ import torch
 
 from k2 import layout as L
 from k2.data import Frames, flat_state
-from k2.losses import SIGReg, relative_gate, token_divergence, token_losses, variant_loss
+from k2.losses import SIGReg, token_losses, variant_loss
 from k2.model import Decoder, LinearDecoder
 from k2.train import Config
 from k2.model import World
@@ -37,12 +37,13 @@ def test_steps_stay_inside_episodes():
 
 def test_shapes_and_rollout():
     torch.manual_seed(0)
-    cfg = small("E3", k=2, context=2)
+    cfg = small("E1", k=2, context=2)
     model = World(cfg)
+    assert model.decoder is None and World(small("E0")).predictor is None
     _, f, m = batch()
     z = model.encoder(f)
     assert z.shape == (8, 3, 32)
-    out = model.decoder(z)
+    out = Decoder(32, 32, 1, 2)(z)
     assert out["block"].shape == (8, 3, L.TILES, L.NUM_BLOCKS) and out["light"].shape == (8, 3)
     assert token_losses(out, f).shape == (8, 3, L.NUM_TOKENS)
     torch.nn.init.normal_(model.predictor.out.weight, std=0.1)
@@ -56,20 +57,6 @@ def test_shapes_and_rollout():
     assert LinearDecoder(32)(z)["mob"].shape == (8, 3, L.TILES, L.NUM_MOBS)
 
 
-def test_gate_is_scale_free_and_floored():
-    g = torch.rand(100) ** 4
-    a, b = relative_gate(g, 0.1, 1.0), relative_gate(g * 37.0, 0.1, 1.0)
-    torch.testing.assert_close(a, b)
-    assert a.min() >= 0.1 and a.max() <= 1.0
-    assert a[g.argmin()] > a[g.argmax()]
-
-
-def test_divergence_is_zero_on_itself():
-    dec = Decoder(16, 16, 1, 2)
-    out = dec(torch.randn(4, 16))
-    assert token_divergence(out, out).abs().max() < 1e-5
-
-
 def test_sigreg_prefers_gaussian():
     torch.manual_seed(0)
     s = SIGReg(num_proj=256)
@@ -81,7 +68,7 @@ def test_sigreg_prefers_gaussian():
 def test_variants_train_and_e2_detaches_the_target():
     torch.manual_seed(0)
     _, f, m = batch()
-    for v in ("E0", "E1", "E2", "E3", "E4"):
+    for v in ("E0", "E1", "E2"):
         cfg = small(v, k=2, context=2)
         model = World(cfg)
         loss, logs = variant_loss(model, f, m, cfg, SIGReg(num_proj=64))

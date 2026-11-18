@@ -18,12 +18,12 @@ Level 2 of a hierarchical JEPA world model on Craftax-Classic. Can a level-2 lat
 | `k2/oracle.py` | JAX | the oracle table: per factor, the share of 32 fresh-key replays matching the most common outcome |
 | `k2/data.py` | torch | the cache on the device, batches of level-2 steps |
 | `k2/model.py` | torch | tokenizer and encoder, causal residual predictor, per-token decoder, linear probe |
-| `k2/losses.py` | torch | SIGReg, per-token losses, the relative gate, the losses of E0 to E4 |
+| `k2/losses.py` | torch | SIGReg, per-token losses, the losses of E0 to E2 |
 | `k2/train.py` | torch | the config, training, checkpoints, resume |
 | `k2/readouts.py` | torch | fresh decoder and linear probe per class, kept against predictable, prediction, geometry |
 | `k2/report.py` | | the markdown report, read against the control, with what it does not show |
 | `k2/plan.py` | both | level-2 CEM in the latent, the level-1 executor CEM in the simulator, the controls |
-| `notebooks/E0..E4.ipynb` | | one notebook per variant (written by `notebooks/make_notebooks.py`) |
+| `notebooks/E0..E2.ipynb` | | one notebook per variant (written by `notebooks/make_notebooks.py`) |
 
 ## Order of work, with commands
 
@@ -35,7 +35,7 @@ Every run of minutes or more waits for a go-ahead. The times are estimates unles
    - `.venv/bin/python -m k2.cache`: train, val and test into `data/cache`. About 1 to 2 minutes, about 450 MB (train about 300 MB).
    - `.venv/bin/python -m k2.sim --split val`: the guard (true-key replay reproduces the stored frames). About 10 s.
 1. **Mac: the oracle table.** `.venv/bin/python -m k2.oracle --k 1 8`: 2048 val frames x 32 keys, about a minute (the simulator does about 24k steps/s here, measured). Writes `data/cache/oracle_k{1,8}.{npz,md}`.
-2. **Pod: E0**, then 3. **E1 against E2**, then 4. **E3 against E4**, at k = 1: the notebooks, one epoch (8000 steps) each, about 3 to 5 minutes of training plus readouts on an A40. Upload `data/cache/{train,val,val_full}.npz` and `oracle_k*.npz` first.
+2. **Pod: E0**, then 3. **E1 against E2**, at k = 1: the notebooks, one epoch (8000 steps) each, about 3 to 5 minutes of training plus readouts on an A40. Upload `data/cache/{train,val,val_full}.npz` and `oracle_k*.npz` first.
 5. **k = 8:** the same notebooks with `K = 8`. Planning (`python -m k2.plan runs/<run> --split val`, run by the notebook) restores the task starts from `val_full.npz` and needs `achievements` from `val.npz`; its time is still to be measured (`python -m k2.plan --speed` gives the simulator's rate on a machine).
 
 The JAX processes on a pod run without `LD_LIBRARY_PATH` (the planning cell strips it).
