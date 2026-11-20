@@ -11,6 +11,28 @@ An encoder `z = E(s_t)` and a predictor `ẑ_{t+k} = P(z_t, m_t)` at stride `k =
 
 **Frame.** The input is the observation `state` (one frame, 1345-d), a stand-in for a latent we already have (DINOv3, LeVJEPA, ...). Level 1 plans in it, one action per step, with CEM in the JAX simulator; this model is the level above it. The losses see only `state` and the actions; `full_state`, the replay oracle and the readouts are for evaluation only.
 
+## Concepts
+
+**Three things called abstraction.**
+1. *Selection:* keep some factors, drop the others. A JEPA does this: it shrinks what it cannot predict toward zero variance; SIGReg only prevents the total collapse.
+2. *Coarse-graining:* a many-to-one map `φ`. A mob's tile becomes its quadrant: the content stays, at a coarser resolution. This is the goal's sense.
+3. *Predicting expectations:* an MSE predictor outputs `E[z_{t+k}]`, a statement about a distribution, not a coarser state.
+
+In a continuous latent, coarse-graining is invariance: states that differ only below the resolution map to the same point. Selection is invariance by deletion.
+
+**Closure.** `z = φ(s)` is closed at stride k when the full state adds nothing to the prediction of `z`'s future beyond `z` itself: `p(z_{t+k} | s_t, m_t) = p(z_{t+k} | z_t, m_t)`. Example: inventory alone is not closed, since whether wood is collected depends on the tile the player faces; a mob's quadrant is not closed while a mob near the border may cross it. Closure is the goal's "needed for the prediction"; determinism on top of it is the goal's "predictable". The identity map is closed but not deterministic, a constant map both but empty: closure alone does not pick a level, the goal's "as fine as possible" does.
+
+| Line of work | What it says | For this goal |
+|---|---|---|
+| State abstraction in RL (Li, Walsh & Littman 2006) | A unified framework for aggregating MDP states; the strictest kind keeps a closed abstract model | closure, there with rewards |
+| Markov state abstractions (Allen et al., NeurIPS 2021) | an abstraction that keeps the Markov property, learned without reward (inverse model + temporal contrast) | closure without labels |
+| Self-predictive RL (Tang et al., ICML 2023; Ni et al., ICLR 2024) | idealized (linear, tabular, stop-gradient, optimal predictor): the covariance is conserved and the latent turns toward the top eigenvectors of the transition matrix; for n steps, of its n-th power (stated, not proven) | a JEPA selects persistent modes; at stride k fast modes fade like λ^k. Shrinking comes from departures from the idealization |
+| Lumpability, closure (Kemeny & Snell; Rosas et al. 2024) | informational closure: `I(X_t; Z_future | Z_past) = 0`; strong lumpability ⇔ `H(Z_{t+1} | Z_t) = H(Z_{t+1} | X_t)`; identity and constant map bound a lattice of closed levels; autonomous processes only | a precise, label-free definition of closure |
+| Causal emergence (Hoel, Albantakis & Tononi, PNAS 2013) | a macro scale can carry more effective information (determinism, degeneracy) than the micro scale | why coarsening can raise predictability |
+| Molecular kinetics: VAMPnets (Mardt et al. 2018), SPIB (Wang & Tiwary 2021) | coarse states whose dynamics at a lag time Δt is Markov; SPIB: a continuous Gaussian bottleneck predicts the discrete coarse state at t + Δt, the labels refined from its own predictions; a larger Δt merges states (4 to 3 to 2) | the lag is our k; the bottleneck stays continuous, only the target is coarse; no actions |
+
+**Consequences.** The goal is an information trade-off: as much about `s_t` as possible while `z_{t+k}` stays predictable from `z_t` and `m_t`. The prediction loss alone asks for closure but rewards collapse; reconstruction rewards resolution but asks for no closure. Prediction error says nothing alone, since shrinking lowers it; closure is measurable without labels as the gap between predicting `z_{t+k}` from `s_t` and from `z_t`. The stride sets the granularity.
+
 ## Hints
 
 What Grace, AAC and K2 have suggested so far. One seed each and often a different setting (pixels, a synthetic grid world): starting points, not results. Here everything is proven again. Runs: `runs/E0_k1`; `runs/archive/` and git tag `archive/k1-series` hold the rest.
