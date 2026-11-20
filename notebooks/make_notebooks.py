@@ -141,6 +141,16 @@ target latent, coarse-grains: it keeps a coarse, predictable version of content 
 | from step 0 | no | delete | AAC A3 |
 | never | no | control (collapse onto the most predictable directions) | |
 
+## What we want to learn
+
+1. **The core claim:** with reconstruction holding the content, does the target gradient coarse-grain (row 1) instead
+   of keeping everything (row 3) or deleting (row 4)?
+2. **The race:** does it happen at all once the reconstruction is there (row 1 against row 2, the early checkpoints)?
+3. **lam as the granularity:** which content stays at tile, quadrant or count level as lam grows (R2: the level is a
+   choice, so we want the curve, not one point).
+4. **The actions:** are the facing and the view's shift foreseen (R3), which the ideal latent without actions loses (R1)?
+5. **Go or no-go for stage 2:** does the mechanism hold in the linear model before we spend GPU time on the deep one?
+
 ## The objective
 
     L = rec_weight * sum_tokens w * CE(D(z_t), s_t)   +   lam * E[ e^T C^-1 e ],   e = P(z_t, m_t) - z_{t+4}
