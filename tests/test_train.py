@@ -27,27 +27,6 @@ def test_train_resume_readouts_report(cache_dir, tmp_path):
     assert "E1 (control)" in text and "What this does not show" in text
 
 
-def test_e3_ramp_starts_saves_and_resumes(cache_dir, tmp_path):
-    # a tolerance of 10 counts every dimension as plateaued: the ramp starts at the second check (step 4)
-    kw = dict(width=32, layers=1, heads=2, queries=2, query_dim=16, latent=32, pred_width=32, pred_layers=1,
-              dec_layers=1, sigreg_proj=64, batch=8, log_every=1, save_every=3, device="cpu", cache=str(cache_dir),
-              warmup=1, plateau_window=2, plateau_tol=10.0, ramp_steps=2)
-    cfg = Config(variant="E3", k=1, steps=3, checkpoints=(0,), out=str(tmp_path / "E3"), **kw)
-    train(cfg)
-    assert not (tmp_path / "E3" / "ramp.json").exists()
-    cfg.steps = 8
-    train(cfg)  # resumes at step 3 with the ramp's state
-    assert json.loads((tmp_path / "E3" / "ramp.json").read_text()) == {"trigger": 4, "full": 6}
-    log = read_log(cfg.out)
-    np.testing.assert_array_equal(log["step"], np.arange(1, 9))
-    # g used in step s + 1 is value(s): 0 up to the step after the trigger, then (s - 4) / 2, capped at 1
-    np.testing.assert_allclose(log["target_grad"], [0, 0, 0, 0, 0, 0.5, 1, 1])
-    assert {p.name for p in (tmp_path / "E3").glob("ckpt_*.pt")} == {f"ckpt_{s:06d}.pt" for s in (0, 3, 4, 6, 8)}  # 3: the end of the first run
-    run_readouts(cfg.out, "cpu", decoder_steps=2, n_train=64, n_eval=64, horizon=2)
-    assert set(json.loads((tmp_path / "E3" / "readouts.json").read_text())) == {"0", "3", "4", "6", "8"}
-    assert "plateaued" in report.write_report(cfg.out)
-
-
 def test_kept_against_predictable_counts_and_report(cache_dir, tmp_path):
     """The 2 x 2 per kind and class, from a synthetic oracle: counts add up, unchanged apart, the report prints them."""
     import torch
@@ -79,3 +58,17 @@ def test_kept_against_predictable_counts_and_report(cache_dir, tmp_path):
     assert sum(g["changing"]["n"] for g in out["kinds"].values()) >= chg.sum()  # a tile counts for its block and mobs
     text = "\n".join(kept_lines(out, out, "E1"))
     assert "| kind |" in text and "| class |" in text and "E1, all agreed" in text and "all agreed" in text
+
+
+def test_e3_switches_stage_and_resumes_across_the_switch(cache_dir, tmp_path):
+    kw = dict(width=32, layers=1, heads=2, queries=2, query_dim=16, latent=32, pred_width=32, pred_layers=1,
+              dec_layers=1, sigreg_proj=64, batch=8, log_every=1, save_every=1, device="cpu", cache=str(cache_dir))
+    cfg = Config(variant="E3", k=2, steps=3, switch=2, checkpoints=(0, 2), out=str(tmp_path / "E3"), **kw)
+    train(cfg)
+    cfg.steps = 5
+    train(cfg)  # resumes in stage 2
+    log = read_log(cfg.out)
+    np.testing.assert_array_equal(log["step"], [1, 2, 3, 4, 5])
+    np.testing.assert_array_equal(log["stage"], [1, 1, 2, 2, 2])
+    run_readouts(cfg.out, "cpu", decoder_steps=2, n_train=64, n_eval=64, horizon=2)
+    assert "E3" in report.write_report(cfg.out)

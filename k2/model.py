@@ -171,7 +171,7 @@ class LinearDecoder(nn.Module):
 
 
 class World(nn.Module):
-    """The modules of one variant: the encoder always, the predictor unless E0, the decoder in E0."""
+    """The modules of one variant: the encoder always, the predictor unless E0, the decoder in E0 and E3."""
 
     def __init__(self, cfg):
         super().__init__()
@@ -180,4 +180,4 @@ class World(nn.Module):
             Predictor(cfg.latent, cfg.k, cfg.context, cfg.pred_width, cfg.pred_layers, cfg.heads)
             if cfg.variant != "E0" else None
         )  # fmt: skip
-        self.decoder = Decoder(cfg.latent, cfg.width, cfg.dec_layers, cfg.heads) if cfg.variant == "E0" else None
+        self.decoder = Decoder(cfg.latent, cfg.width, cfg.dec_layers, cfg.heads) if cfg.variant in ("E0", "E3") else None

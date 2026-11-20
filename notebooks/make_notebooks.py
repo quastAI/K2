@@ -11,7 +11,17 @@ VARIANTS = {  # id: (control, title)
     "E0": (None, "capacity check (autoencoder only)"),
     "E1": ("E2", "prediction with the gradient through the target + SIGReg (A3 analogue)"),
     "E2": ("E1", "prediction with a detached target + SIGReg (A4 analogue)"),
-    "E3": ("E2", "E2 until the predictor plateaus on every dimension, then the target's gradient ramps up"),
+    "E3": ("E0", "the Grace model: reconstruction first, then keep what the predictor foresees"),
+}
+STEPS = {  # id: the STEPS line's value
+    "E3": "16000  # stage 1 until SWITCH, stage 2 after it (about four epochs at K = 1, batch 512)",
+}
+SETTINGS = {  # id: (extra lines before CACHE, extra arguments of train.Config)
+    "E3": (
+        "SWITCH = 10000  # stage 2 starts here (fresh optimiser state, same rate); raise SWITCH and STEPS to extend stage 1\n"
+        "CHECKPOINTS = (0, 3000, SWITCH)  # and the last step\n",
+        "\n    switch=SWITCH, checkpoints=CHECKPOINTS,",
+    ),
 }
 
 INTRO = """# {id}: {title}
@@ -61,14 +71,14 @@ CONFIG = """VARIANT = "{id}"
 CONTROL = {control!r}  # the variant this run is read against (E0 is the reference for all)
 K = 1  # stride; step 5 of the order of work runs K = 8
 CONTEXT = 1  # C
-STEPS = 8000  # about two epochs at K = 1 (batch 512)
-CACHE = ROOT / "data/cache"  # the local disk
+STEPS = {steps}
+{settings}CACHE = ROOT / "data/cache"  # the local disk
 RUNS = ROOT / "runs"  # on a pod: a folder on the volume, e.g. Path("/workspace/K2/runs")
 PLAN = K > 1  # level-2 planning, with the executor check (oracle subgoals)
 
 cfg = train.Config(
     variant=VARIANT, k=K, context=CONTEXT, steps=STEPS, cache=str(CACHE), out=str(RUNS / f"{{VARIANT}}_k{{K}}"),
-    control=str(RUNS / f"{{CONTROL}}_k{{K}}") if CONTROL else None,
+    control=str(RUNS / f"{{CONTROL}}_k{{K}}") if CONTROL else None,{args}
 )
 cfg"""
 
@@ -107,7 +117,8 @@ def notebook(vid, control, title):
         md("## Tests\n\n`pytest` on the Mac-built code and a tiny synthetic cache: a failure here is an environment problem, not a result."),
         code(TESTS),
         md("## Configuration"),
-        code(CONFIG.format(id=vid, control=control)),
+        code(CONFIG.format(id=vid, control=control, steps=STEPS.get(vid, "8000  # about two epochs at K = 1 (batch 512)"),
+                           settings=SETTINGS.get(vid, ("", ""))[0], args=SETTINGS.get(vid, ("", ""))[1])),
         md("## Data check"),
         code(DATA),
         md("## Training"),

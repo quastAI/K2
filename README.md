@@ -18,7 +18,7 @@ Level 2 of a hierarchical JEPA world model on Craftax-Classic. Can a level-2 lat
 | `k2/oracle.py` | JAX | the oracle table: per factor, the share of 64 fresh-key replays matching the most common outcome; predictable at three lines (all agreed, 0.9, 0.75), per kind, for the factors that change |
 | `k2/data.py` | torch | the cache on the device, batches of level-2 steps |
 | `k2/model.py` | torch | tokenizer and encoder, causal residual predictor, per-token decoder, linear probe |
-| `k2/losses.py` | torch | SIGReg, per-token losses, the losses of E0 to E3, E3's target-gradient ramp |
+| `k2/losses.py` | torch | SIGReg, per-token losses, the losses of E0 to E3 (E3: the Grace model, two stages in one run) |
 | `k2/train.py` | torch | the config, training, checkpoints, resume |
 | `k2/readouts.py` | torch | fresh decoder and linear probe per class, kept against predictable, prediction, geometry |
 | `k2/report.py` | | the markdown report, read against the control, with what it does not show |
@@ -35,7 +35,7 @@ Every run of minutes or more waits for a go-ahead. The times are estimates unles
    - `.venv/bin/python -m k2.cache`: train, val and test into `data/cache`. About 1 to 2 minutes, about 450 MB (train about 300 MB).
    - `.venv/bin/python -m k2.sim --split val`: the guard (true-key replay reproduces the stored frames). About 10 s.
 1. **Mac: the oracle table.** `.venv/bin/python -m k2.oracle --k 1 8`: 2048 val frames x 64 keys, about a minute (measured; the simulator does about 24k steps/s here). Writes `data/cache/oracle_k{1,8}.{npz,md}`.
-2. **Pod: E0**, then 3. **E1 against E2**, then **E3 against E2** (E2 with the target's gradient ramped up once the predictor plateaus on every dimension), at k = 1: the notebooks, 8000 steps of batch 512 each (about two epochs), about 6 to 10 minutes of training plus readouts on an A40 (an estimate). Unzip `k2_pod.zip` into `/root` first (code plus `data/cache/{train,val,val_full}.npz` and `oracle_k*.npz`); each notebook's first cells install `requirements.txt` into the kernel's Python and run the tests.
+2. **Pod: E0**, then 3. **E1 against E2**, then 4. **E3 against E0** (the Grace model: error-weighted reconstruction and detached prediction without SIGReg until step 10000, then the decoded prediction and the prediction-gated reconstruction to step 16000; about 45 to 60 minutes of training on an A40, an estimate from E0's 0.14 s per step), at k = 1: the notebooks, 8000 steps of batch 512 each (about two epochs), about 6 to 10 minutes of training plus readouts on an A40 (an estimate). Unzip `k2_pod.zip` into `/root` first (code plus `data/cache/{train,val,val_full}.npz` and `oracle_k*.npz`); each notebook's first cells install `requirements.txt` into the kernel's Python and run the tests.
 5. **k = 8:** the same notebooks with `K = 8`. Planning (`python -m k2.plan runs/<run> --split val`, run by the notebook) restores the task starts from `val_full.npz` and needs `achievements` from `val.npz`; its time is still to be measured (`python -m k2.plan --speed` gives the simulator's rate on a machine).
 
 The JAX processes on a pod run without `LD_LIBRARY_PATH` (the planning cell strips it).

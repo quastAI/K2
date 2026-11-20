@@ -269,7 +269,7 @@ def run_readouts(run_dir, device=None, decoder_steps=2000, n_train=65536, n_eval
     path = run_dir / "readouts.json"
     results = json.loads(path.read_text()) if path.exists() else {}
     frames = (Frames(load("train", cfg.cache), device), Frames(load("val", cfg.cache), device))
-    for ckpt in sorted(run_dir.glob("ckpt_*.pt")):  # E3's ramp checkpoints fall between the configured steps
+    for ckpt in sorted(run_dir.glob("ckpt_*.pt")):
         step = int(ckpt.stem.split("_")[1])
         if str(step) in results:
             continue
