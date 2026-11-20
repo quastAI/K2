@@ -53,6 +53,14 @@ In a continuous latent, coarse-graining is invariance: states that differ only b
 - Mobs: no gain; even with the actions, zombie in view 0.61, cow 0.48, arrow 0.24.
 - Inventory and vitals: no gain beyond copying (0.87 to 0.99); within 4 steps they rarely change.
 
+**R4. E1, linear stage 1: prediction pressure with reconstruction moves capacity from the unpredictable to the predictable, but only after a warm-up.** Linear encoder, action-bilinear predictor, D = 64, k = 4, 5000 steps (`notebooks/E1.ipynb`, `runs/E1_linear`; one seed, not converged). R² on val, ores and stations / mobs at tile, quadrant, view:
+- No selection (stop-gradient + reconstruction, lam 0.1): 0.04 / 0.16 / 0.41 and 0.04 / 0.17 / 0.41; facing 0.55.
+- Target gradient after a 1000-step warm-up, lam 10: 0.05 / 0.26 / 0.71 and 0.01 / 0.08 / 0.16; facing 0.97 (foreseen 0.80, copying 0.00).
+- Target gradient from step 0 holds less (ores in view 0.31 to 0.45): a race, even with the reconstruction.
+- Without reconstruction nothing is deleted: the whitening prevents the collapse (as in VAMP); it holds as much as the target arm at lam 10.
+- Stop-gradient with the whitened error is unstable at lam ≥ 1 (the whitened error explodes, z shrinks to 0.02): the normalisation gets no gradient.
+- At D = 64 no arm can represent tiles (0.04 or less), so coarse-graining against deletion is not tested yet.
+
 ## Hints
 
 What Grace, AAC and K2 have suggested so far. One seed each and often a different setting (pixels, a synthetic grid world): starting points, not results. Here everything is proven again. Runs: `runs/E0_k1`; `runs/archive/` and git tag `archive/k1-series` hold the rest.
