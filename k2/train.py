@@ -25,12 +25,13 @@ from .data import Frames
 from .losses import variant_loss
 from .model import World
 
-VARIANTS = ("E0",)
+VARIANTS = ("E0", "E1")
 
 
 @dataclass
 class Config:
     variant: str = "E0"
+    arch: str = "deep"  # "deep": token transformer encoder and predictor; "linear": linear encoder, bilinear predictor, linear decoder
     k: int = 1  # stride
     context: int = 1  # C
     steps: int = 8000  # one epoch at k = 1 (about 2M level-2 steps) is about 3.9k steps of batch 512
@@ -48,6 +49,15 @@ class Config:
     pred_width: int = 256
     pred_layers: int = 3
     dec_layers: int = 2
+    # E1: reconstruction weight (0: none), lam (price of one unpredictable whitened direction, in nats per frame),
+    # target_from (step from which the prediction's gradient reaches z_{t+k}; -1: never), the whitening's relative
+    # regularisation, the label-free error weights of the reconstruction
+    rec_weight: float = 1.0
+    lam: float = 1.0
+    target_from: int = 0
+    white_eps: float = 1e-4
+    error_power: float = 1.0
+    error_cap: float = 20.0
     # data: all sources (0 expert, 3 early checkpoint), as AAC's level 1; an open decision
     sources: tuple = (0, 3)
     checkpoints: tuple = (0, 100, 300, 1000, 3000)

@@ -121,8 +121,164 @@ def finish(nb):
     return nb
 
 
+E1_IDEA = r"""# E1: does a gradient through the target coarse-grain?
+
+## Question and hypothesis
+
+The goal (README) asks for a latent that holds as much about the state as stays predictable at stride k = 4, with
+what is unpredictable coarsened (a mob's tile becomes its quadrant), not deleted. A JEPA ranks by persistence: it
+keeps slow content and its harmonics and shrinks the rest (README, Concepts, R1, R2). E1 replaces the anti-collapse
+"spread" by "information": the reconstruction of the input, which a harmonic does not improve.
+
+**Hypothesis.** Reconstruction plus a scale-free prediction penalty, *with* the prediction's gradient reaching the
+target latent, coarse-grains: it keeps a coarse, predictable version of content whose fine version is unpredictable.
+
+| gradient through the target | reconstruction | expected | known from |
+|---|---|---|---|
+| from step 0 | yes | **coarse-grain** (if there is no race) | untested |
+| after a warm-up | yes | coarse-grain (if there is a race) | untested |
+| never (stop-gradient) | yes | no selection: everything kept | E0, E3 stage 1 |
+| from step 0 | no | delete | AAC A3 |
+| never | no | control (collapse onto the most predictable directions) | |
+
+## The objective
+
+    L = rec_weight * sum_tokens w * CE(D(z_t), s_t)   +   lam * E[ e^T C^-1 e ],   e = P(z_t, m_t) - z_{t+4}
+
+- **Reconstruction** of every frame, summed over the 82 tokens (nats per frame), weighted per token by its own error
+  (label-free, as in Grace). It measures what z knows about the state; a harmonic adds nothing to it.
+- **Prediction** in the coordinates that whiten the target batch (C: its covariance, regularised by 1e-4 of the mean
+  variance), **summed** over the directions. Shrinking z or one direction buys nothing; a direction the predictor
+  cannot foresee costs about 1; adding predictable directions does not dilute the others.
+- **lam** is a price in nats per frame: a fully unpredictable direction stays only if it carries more than about lam
+  nats per frame. The game has no timescale gap (R2), so lam is a choice; we sweep it.
+- **The actions** enter the predictor (R3: the facing and the view's shift need them).
+- **The target gradient** (`target_from`): the step from which the prediction's gradient reaches z_{t+4} (0: from the
+  start; -1: never). It is the lever: without it nothing pushes z_{t+4} itself to be predictable.
+
+## Shortcuts and safeguards
+
+1. Shrink the latent: closed by the whitening.
+2. Keep unpredictable content at a tiny variance in one direction: closed per direction by the full whitening, down to
+   the regularisation (1e-4 of the mean variance). Below it, it can slip through: we watch the raw latent's shape.
+3. Full whitening makes every one of the D directions count: spare directions fill with harmonics (harmless) or with
+   unpredictable content (penalised). D and lam are chosen together.
+4. **Early pruning (the race):** the predictor starts bad, so everything looks unpredictable and the target gradient
+   may delete before the predictor has learned. This spoiled ideas before (AAC A3, Grace). E1 runs the target gradient
+   from step 0 *and*, as a variant, after a fixed warm-up; dense early checkpoints show what disappears and whether it
+   comes back. No automatic switch (the old E3's plateau rule never fired).
+5. The egocentric view shifts with every move: predictable with the actions, but the predictor must learn the shift;
+   if it learns it late, the target gradient may delete the map.
+6. Rare content is cheap for a plain reconstruction: the error weights counter it.
+
+## What may look negative although the idea holds
+
+- Read only per tile, coarse-graining looks like loss: we read tile, quadrant and count in view.
+- E1 should hold less than E0: the criterion is "coarse but predictable", not "everything".
+- One lam says little: too large deletes everything, too small is an autoencoder.
+- Mobs are only moderately predictable even when coarse (R3): at any lam they blur or go; that is the tolerance, not
+  a failure of the idea.
+- Too short training (E0 needed more than 12k steps), one seed.
+
+## Stages
+
+1. **Linear (this machine, CPU):** a linear encoder, a predictor bilinear in the actions (a Koopman model with inputs),
+   a linear decoder. Five arms x lam. Free of deep-network confounds; R1 is its reference. If the mechanism fails here,
+   a deep model is unlikely to rescue it.
+2. **Deep (GPU), only after stage 1 is read:** the token encoder, the same arms at the lam chosen from stage 1.
+
+Readouts per checkpoint (`readouts.run_resolution`, labels for evaluation only): R² on val of what z **holds**, what
+the predicted latent **foresees** at t+4, and what **copying** z_t gives, per group at tile / quadrant / view; the
+raw latent's participation ratio."""
+
+E1_STAGE1 = """from IPython.display import Markdown
+from k2 import readouts, report, train
+
+CACHE = ROOT / "data/cache"
+RUNS = ROOT / "runs/E1_linear"
+K, LATENT, STEPS = 4, 64, 5000
+WARMUP = 1000  # the warm-up variant: the target gradient from this step on
+LAMBDAS = (0.1, 1.0, 10.0)
+ARMS = {  # name: (target_from, rec_weight)
+    "target + rec": (0, 1.0),
+    "warm-up target + rec": (WARMUP, 1.0),
+    "stop-grad + rec": (-1, 1.0),
+    "target, no rec": (0, 0.0),
+    "stop-grad, no rec": (-1, 0.0),
+}
+
+
+def runs():
+    \"\"\"{label: Config}: the arms with reconstruction at every lam, the ones without at lam 1 (lam only scales them).\"\"\"
+    out = {}
+    for arm, (target_from, rec) in ARMS.items():
+        for lam in (LAMBDAS if rec > 0 else (1.0,)):
+            name = f"{arm}, lam {lam:g}"
+            out[name] = train.Config(variant="E1", arch="linear", k=K, latent=LATENT, steps=STEPS, lr=1e-3, warmup=100,
+                                     batch=512, lam=lam, rec_weight=rec, target_from=target_from,
+                                     checkpoints=(0, 100, 300, 1000, 3000), device="cpu", cache=str(CACHE),
+                                     out=str(RUNS / name.replace(" ", "_").replace(",", "").replace("+", "and")))
+    return out
+
+
+print(len(runs()), "runs")"""
+
+E1_TRAIN1 = """for cfg in runs().values():  # a finished run returns at once
+    train.train(cfg)"""
+
+E1_READ1 = """for cfg in runs().values():
+    readouts.run_resolution(cfg.out, "cpu", stride=K)
+labels = {name: cfg.out for name, cfg in runs().items()}
+Markdown("### What z holds (end)\\n" + report.resolution_table(labels, "holds")
+         + "\\n### What the predicted latent foresees at t + 4 (end)\\n" + report.resolution_table(labels, "foresees")
+         + "\\n### Copying z_t (end)\\n" + report.resolution_table(labels, "copy"))"""
+
+E1_RACE1 = """# the race: what z holds over the first steps, for the arms with a target gradient from step 0
+early = {n: c.out for n, c in runs().items() if n.startswith(("target", "warm-up"))}
+Markdown("\\n".join(f"### step {s}\\n" + report.resolution_table(early, "holds", str(s)) for s in (100, 300, 1000, 3000)))"""
+
+E1_STAGE2 = """RUN_STAGE2 = False  # only after stage 1 is read: set LAM2 from it, then True (GPU)
+LAM2 = 1.0
+RUNS2 = ROOT / "runs/E1_deep"  # on a pod: a folder on the volume
+runs2 = {arm: train.Config(variant="E1", arch="deep", k=K, latent=256, steps=16000, lam=LAM2, rec_weight=rec,
+                           target_from=target_from, checkpoints=(0, 100, 300, 1000, 3000, 8000),
+                           cache=str(CACHE), out=str(RUNS2 / arm.replace(" ", "_").replace(",", "").replace("+", "and")))
+         for arm, (target_from, rec) in ARMS.items()}
+if RUN_STAGE2:
+    for cfg in runs2.values():
+        train.train(cfg)
+        readouts.run_resolution(cfg.out, stride=K)
+    Markdown(report.resolution_table({a: c.out for a, c in runs2.items()}, "holds")
+             + report.resolution_table({a: c.out for a, c in runs2.items()}, "foresees"))"""
+
+
+def e1_notebook():
+    nb = nbf.v4.new_notebook()
+    md, code = nbf.v4.new_markdown_cell, nbf.v4.new_code_cell
+    nb.cells = [
+        md(E1_IDEA),
+        md("## Environment\n\nInstalls the requirements into this kernel's Python (a pip call that does nothing when they are there)."),
+        code(ENV),
+        code(SETUP),
+        md("## Tests"),
+        code(TESTS),
+        md("## Stage 1: the mechanism, linear (CPU)\n\n11 runs of 5000 steps, about 17 minutes on the Mac (0.018 s per step, measured)."),
+        code(E1_STAGE1),
+        code(E1_TRAIN1),
+        md("## Stage 1: readouts"),
+        code(E1_READ1),
+        md("## Stage 1: the race\n\nWhat disappears in the first steps, and whether it comes back."),
+        code(E1_RACE1),
+        md("## Stage 2: deep (GPU)\n\nOnly after stage 1 is read; the warm-up arm only if stage 1 or the first deep checkpoints show a race."),
+        code(E1_STAGE2),
+    ]
+    return finish(nb)
+
+
 if __name__ == "__main__":
     here = Path(__file__).parent
     for vid, (control, title) in VARIANTS.items():
         nbf.write(notebook(vid, control, title), here / f"{vid}.ipynb")
         print(here / f"{vid}.ipynb")
+    nbf.write(e1_notebook(), here / "E1.ipynb")
+    print(here / "E1.ipynb")

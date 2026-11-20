@@ -86,12 +86,12 @@ What Grace, AAC and K2 have suggested so far. One seed each and often a differen
 | `k2/cache.py` | numpy | the data cache from AAC's HDF5 files (read by path), held-out `full_state` |
 | `k2/oracle.py` | JAX | per factor, the share of 64 fresh-key replays that agree on the outcome at stride k |
 | `k2/data.py` | torch | the cache on the device, batches of level-2 steps |
-| `k2/model.py` | torch | tokenizer and encoder, causal residual predictor, per-token decoder, linear probe |
-| `k2/losses.py` | torch | per-token losses; E0 (reconstruction) |
+| `k2/model.py` | torch | tokenizer and encoder, causal residual predictor, per-token decoder, linear probe; linear encoder and action-bilinear predictor |
+| `k2/losses.py` | torch | per-token losses; E0 (reconstruction); E1 (reconstruction + whitened prediction, the target gradient switchable) |
 | `k2/train.py` | torch | the config, training, checkpoints, resume |
-| `k2/readouts.py` | torch | what z holds (fresh decoder and linear probe on whitened z), prediction against copying, the raw latent's shape |
+| `k2/readouts.py` | torch | what z holds (fresh decoder and linear probe on whitened z), prediction against copying, the raw latent's shape; the resolution readout (holds / foresees / copy at tile, quadrant, view) |
 | `k2/report.py` | | the markdown report of a run |
-| `notebooks/E0.ipynb` | | one notebook per variant (written by `notebooks/make_notebooks.py`) |
+| `notebooks/E0.ipynb`, `E1.ipynb` | | one notebook per variant (written by `notebooks/make_notebooks.py`); E1 states its idea, hypothesis and pitfalls first |
 
 ## Running
 

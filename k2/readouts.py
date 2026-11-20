@@ -358,6 +358,98 @@ def run_readouts(run_dir, device=None, decoder_steps=2000, n_train=65536, n_eval
     return results
 
 
+# --- the content at three resolutions: what z holds, what the predictor foresees, what copying gives -----------------
+
+RES_CLASSES = ["grass", "water", "stone", "tree", "sand", "path", "coal", "iron", "diamond", "crafting_table", "furnace",
+               "lava", "plant"] + L.MOBS  # fmt: skip
+GROUPS = {"terrain": ["grass", "water", "stone", "tree", "sand", "path"],
+          "ores and stations": ["coal", "iron", "diamond", "crafting_table", "furnace"],
+          "mobs": ["zombie", "cow", "skeleton"]}  # fmt: skip
+_r, _c = np.divmod(np.arange(L.TILES), L.COLS)
+QUADRANTS = np.stack([(_r < L.PLAYER[0]) & (_c < L.PLAYER[1]), (_r < L.PLAYER[0]) & (_c > L.PLAYER[1]),
+                      (_r > L.PLAYER[0]) & (_c < L.PLAYER[1]), (_r > L.PLAYER[0]) & (_c > L.PLAYER[1])]).astype(np.float32)  # fmt: skip
+
+
+def content(x: np.ndarray) -> dict:
+    """The content of frames given as `state` vectors (n, 1345): per class its tiles (63 indicators), its count per
+    quadrant (4, without the player's row and column) and its count in view (1); the items, vitals, facing, sleeping."""
+    tiles = x[:, : L.VIEW_DIM].reshape(-1, L.TILES, L.CHANNELS)
+    out = {}
+    for name in RES_CLASSES:
+        t = tiles[:, :, L.BLOCKS.index(name) if name in L.BLOCKS else L.NUM_BLOCKS + L.MOBS.index(name)]
+        out[f"{name}|tile"], out[f"{name}|quadrant"], out[f"{name}|view"] = t, t @ QUADRANTS.T, t.sum(1, keepdims=True)
+    v = L.VIEW_DIM
+    out["items|-"], out["vitals|-"] = x[:, v : v + 12], x[:, v + 12 : v + 16]
+    out["facing|-"], out["sleeping|-"] = x[:, v + 16 : v + 20], x[:, v + 21 : v + 22]
+    return out
+
+
+def _r2(pred: np.ndarray, y: np.ndarray) -> float:
+    sst = ((y - y.mean(0)) ** 2).sum(0)
+    ok = sst > 0
+    return float(1 - ((pred - y) ** 2).sum(0)[ok].sum() / sst[ok].sum()) if ok.any() else float("nan")
+
+
+@torch.no_grad()
+def resolution_readout(model, cfg, frames, n_fit=30000, n_eval=20000, stride=None, seed=0) -> dict:
+    """R^2 on val, per class and resolution, of a ridge regression from the whitened latent (fit on train frames):
+    `holds` reads z_t; `foresees` reads the predicted z^_{t+k} against the content at t+k; `copy` reads z_t against the
+    content at t+k. Also the group means (terrain, ores and stations, mobs) and the raw latent's shape."""
+    from .data import flat_state
+
+    train_frames, val = frames
+    k = stride or cfg.k
+    g = np.random.default_rng(seed)
+    fit = torch.as_tensor(g.choice(len(train_frames), min(n_fit, len(train_frames)), replace=False))
+    z_fit = encode(model.encoder, train_frames, fit).double().cpu()
+    y_fit = content(flat_state(train_frames.frames(fit)).cpu().numpy())
+    mean = z_fit.mean(0)
+    ev, u = torch.linalg.eigh(torch.cov((z_fit - mean).T))
+    w = u / (ev.clamp(min=0) + 1e-6 * ev.max()).sqrt()
+    zf = np.c_[((z_fit - mean) @ w).numpy(), np.ones(len(z_fit))]
+    gram = zf.T @ zf + 1e-3 * np.eye(zf.shape[1])
+    beta = {key: np.linalg.solve(gram, zf.T @ y) for key, y in y_fit.items()}
+
+    def read(z):
+        zz = np.c_[((z.double().cpu() - mean) @ w).numpy(), np.ones(len(z))]
+        return {key: zz @ b for key, b in beta.items()}
+
+    pool = val.starts(k, 1).cpu().numpy()
+    t0 = torch.as_tensor(g.choice(pool, min(n_eval, len(pool)), replace=False))
+    f, m = val.steps(t0, k, 1)
+    z = torch.cat([model.encoder({key: x[a : a + 4096] for key, x in f.items()}) for a in range(0, len(t0), 4096)])
+    now, nxt = content(flat_state({key: x[:, 0] for key, x in f.items()}).cpu().numpy()), content(
+        flat_state({key: x[:, 1] for key, x in f.items()}).cpu().numpy())  # fmt: skip
+    res = {"holds": {key: _r2(p, now[key]) for key, p in read(z[:, 0]).items()},
+           "copy": {key: _r2(p, nxt[key]) for key, p in read(z[:, 0]).items()}}  # fmt: skip
+    if model.predictor is not None:
+        zhat = torch.cat([model.predictor(z[a : a + 4096, :1], m[a : a + 4096]) for a in range(0, len(t0), 4096)])[:, 0]
+        res["foresees"] = {key: _r2(p, nxt[key]) for key, p in read(zhat).items()}
+    for part in list(res.values()):
+        for gname, members in GROUPS.items():
+            for r in ("tile", "quadrant", "view"):
+                part[f"{gname}|{r}"] = float(np.mean([part[f"{c}|{r}"] for c in members]))
+    res["latent"] = latent_stats(model.encoder, val, k)
+    return res
+
+
+def run_resolution(run_dir, device=None, stride=None, cache=None) -> dict:
+    """The resolution readout of every checkpoint of a run into `<run>/resolution.json` (steps already there skipped)."""
+    run_dir = Path(run_dir)
+    cfg = load_config(run_dir)
+    device = device or cfg.device
+    path = run_dir / "resolution.json"
+    results = json.loads(path.read_text()) if path.exists() else {}
+    frames = (Frames(load("train", cache or cfg.cache), device), Frames(load("val", cache or cfg.cache), device))
+    for ckpt in sorted(run_dir.glob("ckpt_*.pt")):
+        step = ckpt.stem.split("_")[1].lstrip("0") or "0"
+        if step not in results:
+            _, model = load_model(ckpt, device)
+            results[step] = resolution_readout(model, cfg, frames, stride=stride)
+            path.write_text(json.dumps(results, indent=1))
+    return results
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("run")

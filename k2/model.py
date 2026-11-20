@@ -169,14 +169,59 @@ class LinearDecoder(nn.Module):
         return split_heads(self.linear(z))
 
 
+class LinearEncoder(nn.Module):
+    """Frames (...) -> latents (..., latent): one linear map of the `state` vector."""
+
+    def __init__(self, latent=64):
+        super().__init__()
+        self.linear = nn.Linear(L.STATE_DIM, latent)
+        self.latent = latent
+
+    def forward(self, f: dict) -> torch.Tensor:
+        from .data import flat_state
+
+        return self.linear(flat_state(f))
+
+
+class BilinearPredictor(nn.Module):
+    """z_{j+1} = z_j + A z_j + sum_a u_a B_a z_j + c(u), u the one-hot actions of the macro-action: a linear predictor
+    whose operator depends on the actions (Koopman with inputs). Context 1: the last latent of the context is used."""
+
+    def __init__(self, latent=64, k=4):
+        super().__init__()
+        self.k, self.context = k, 1
+        n = k * L.NUM_ACTIONS
+        self.a = nn.Linear(latent, latent, bias=False)
+        self.b = nn.Parameter(torch.zeros(n, latent, latent))
+        self.c = nn.Linear(n, latent)
+        nn.init.zeros_(self.a.weight)
+
+    def forward(self, z: torch.Tensor, m: torch.Tensor) -> torch.Tensor:
+        """z (B, c, D), m (B, c, k) -> (B, c, D), each step from its own latent and macro-action."""
+        u = nn.functional.one_hot(m, L.NUM_ACTIONS).float().flatten(-2)  # (B, c, k * 17)
+        return z + self.a(z) + torch.einsum("bcn,nde,bce->bcd", u, self.b, z) + self.c(u)
+
+    def rollout(self, z: torch.Tensor, m: torch.Tensor) -> torch.Tensor:
+        """Context latents z (B, c, D) and macro-actions m (B, c - 1 + H, k) -> the predicted latents (B, H, D)."""
+        cur, out = z[:, -1:], []
+        for h in range(m.shape[1] - z.shape[1] + 1):
+            cur = self(cur, m[:, z.shape[1] - 1 + h : z.shape[1] + h])
+            out.append(cur[:, 0])
+        return torch.stack(out, 1)
+
+
 class World(nn.Module):
-    """The modules of one variant: encoder and decoder always, the predictor unless E0."""
+    """The modules of one variant: encoder and decoder always, the predictor unless E0; `cfg.arch` picks deep or linear."""
 
     def __init__(self, cfg):
         super().__init__()
-        self.encoder = Encoder(cfg.width, cfg.layers, cfg.heads, cfg.queries, cfg.query_dim, cfg.latent)
-        self.predictor = (
-            Predictor(cfg.latent, cfg.k, cfg.context, cfg.pred_width, cfg.pred_layers, cfg.heads)
-            if cfg.variant != "E0" else None
-        )  # fmt: skip
-        self.decoder = Decoder(cfg.latent, cfg.width, cfg.dec_layers, cfg.heads)
+        linear = getattr(cfg, "arch", "deep") == "linear"
+        self.encoder = (LinearEncoder(cfg.latent) if linear
+                        else Encoder(cfg.width, cfg.layers, cfg.heads, cfg.queries, cfg.query_dim, cfg.latent))  # fmt: skip
+        if cfg.variant == "E0":
+            self.predictor = None
+        elif linear:
+            self.predictor = BilinearPredictor(cfg.latent, cfg.k)
+        else:
+            self.predictor = Predictor(cfg.latent, cfg.k, cfg.context, cfg.pred_width, cfg.pred_layers, cfg.heads)
+        self.decoder = LinearDecoder(cfg.latent) if linear else Decoder(cfg.latent, cfg.width, cfg.dec_layers, cfg.heads)

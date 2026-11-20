@@ -80,3 +80,66 @@ def test_e0_trains():
     loss.backward()
     assert torch.isfinite(loss) and logs["recon"] == loss.item()
     assert all(p.grad is not None for p in model.encoder.parameters() if p.requires_grad)
+
+
+def test_whitened_error_is_scale_free_and_summed_over_directions():
+    """Shrinking buys nothing; an extra perfectly predicted direction neither dilutes nor adds; an unpredictable
+    direction predicted by its mean costs about 1."""
+    from k2.losses import whitened_error
+
+    torch.manual_seed(0)
+    t = torch.randn(4096, 4)
+    p = t + 0.3 * torch.randn(4096, 4)
+    base = whitened_error(p, t)
+    assert torch.isclose(whitened_error(1e-3 * p, 1e-3 * t), base, rtol=1e-3)
+    s = torch.randn(4096, 1)
+    assert torch.isclose(whitened_error(torch.cat([p, s], 1), torch.cat([t, s], 1)), base, rtol=1e-2)
+    noise = torch.randn(4096, 1)
+    extra = whitened_error(torch.cat([p, torch.zeros(4096, 1)], 1), torch.cat([t, noise], 1)) - base
+    assert 0.9 < extra < 1.1
+
+
+def test_e1_target_gradient_follows_target_from():
+    """Without reconstruction, the last frame of a step is reached only through the prediction's target: from
+    `target_from` on, never with -1."""
+    _, f, m = batch()
+    grads = {}
+    for name, target_from, step in (("never", -1, 10), ("later", 5, 0), ("switched", 5, 5), ("start", 0, 0)):
+        torch.manual_seed(1)
+        cfg = small("E1", k=2, context=2, rec_weight=0.0, target_from=target_from)
+        model = World(cfg)
+        torch.nn.init.normal_(model.predictor.out.weight, std=0.1)
+        f_last = {key: x.clone() for key, x in f.items()}
+        f_last["light"].requires_grad_(True)
+        loss, logs = variant_loss(model, f_last, m, cfg, step=step)
+        loss.backward()
+        grads[name] = f_last["light"].grad[:, -1].abs().sum().item()
+        assert logs["to_target"] == (1.0 if name in ("switched", "start") else 0.0)
+    assert grads["never"] == 0 and grads["later"] == 0 and grads["switched"] > 0 and grads["start"] > 0
+
+
+def test_e1_linear_and_deep_train():
+    _, f, m = batch()
+    for arch in ("linear", "deep"):
+        torch.manual_seed(0)
+        cfg = small("E1", k=2, context=2, arch=arch)
+        model = World(cfg)
+        loss, logs = variant_loss(model, f, m, cfg)
+        loss.backward()
+        assert torch.isfinite(loss) and {"pred_white", "recon", "copy_white", "to_target"} <= set(logs)
+        assert all(p.grad is not None for p in model.encoder.parameters())
+
+
+def test_bilinear_predictor_rollout():
+    from k2.model import BilinearPredictor
+
+    torch.manual_seed(0)
+    pred = BilinearPredictor(8, k=2)
+    torch.nn.init.normal_(pred.b, std=0.1)
+    z = torch.randn(5, 1, 8)
+    m = torch.randint(0, L.NUM_ACTIONS, (5, 3, 2))
+    roll = pred.rollout(z, m)
+    assert roll.shape == (5, 3, 8)
+    one = pred(z, m[:, :1])[:, 0]
+    torch.testing.assert_close(roll[:, 0], one)
+    torch.testing.assert_close(roll[:, 1], pred(one[:, None], m[:, 1:2])[:, 0])

@@ -16,9 +16,12 @@ from .train import load_config, read_log
 
 ROLE = {
     "E0": "capacity reference: what this encoder can hold under reconstruction alone",
+    "E1": "reconstruction + lam x whitened prediction error: does a gradient through the target coarse-grain?",
 }
 NOT_SHOWN = {
     "E0": "E0 has no predictor: it shows what this encoder can hold, not what a predictive loss keeps.",
+    "E1": "One lam, one latent size, one seed; whitening is regularised (content below 1e-4 of the mean variance can "
+    "slip past the prediction penalty).",
 }
 COMMON = [
     "One seed per run.",
@@ -114,6 +117,28 @@ def write_report(run_dir) -> str:
     else:
         lines.append("No predictor (E0).")
     return _write(run_dir, lines, cfg)
+
+
+def resolution_table(runs: dict, part: str = "holds", step: str | None = None) -> str:
+    """A markdown table from `<run>/resolution.json`, one row per run ({label: run_dir}), at `step` (default: the last):
+    R^2 of `part` (holds, foresees, copy) per group at tile / quadrant / view, the items, vitals and facing, and the
+    raw latent's participation ratio."""
+    groups = ("terrain", "ores and stations", "mobs")
+    head = ["run", "step", *[f"{g} (tile / quadrant / view)" for g in groups], "items", "vitals", "facing", "PR"]
+    lines = ["| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
+    for label, run_dir in runs.items():
+        path = Path(run_dir) / "resolution.json"
+        if not path.exists():
+            continue
+        res = json.loads(path.read_text())
+        s = step if step is not None else max(res, key=int)
+        r = res.get(s, {}).get(part)
+        if r is None:
+            continue
+        cells = [" / ".join(_f(r[f"{g}|{x}"], 2) for x in ("tile", "quadrant", "view")) for g in groups]
+        cells += [_f(r[f"{n}|-"], 2) for n in ("items", "vitals", "facing")]
+        lines.append(f"| {label} | {s} | " + " | ".join(cells) + f" | {_f(res[s]['latent']['participation_ratio'], 1)} |")
+    return "\n".join(lines) + "\n"
 
 
 def _write(run_dir, lines, cfg) -> str:

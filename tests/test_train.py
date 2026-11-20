@@ -37,3 +37,16 @@ def test_train_resume_readouts_report(cache_dir, tmp_path):
     assert set(json.loads((tmp_path / "E0b" / "readouts_v1.json").read_text())) == {"2"}  # the old one is kept
     text = report.write_report(cfg.out)
     assert "E0 (control)" in text and "What this does not show" in text
+
+
+def test_e1_linear_resolution_readout(cache_dir, tmp_path):
+    from k2.readouts import run_resolution
+
+    cfg = Config(variant="E1", arch="linear", k=2, steps=3, latent=8, batch=16, checkpoints=(0,), log_every=1,
+                 device="cpu", cache=str(cache_dir), out=str(tmp_path / "E1"))  # fmt: skip
+    train(cfg)
+    res = run_resolution(cfg.out, "cpu")
+    assert set(res) == {"0", "3"}
+    for part in ("holds", "foresees", "copy"):
+        assert "iron|quadrant" in res["3"][part] and "mobs|view" in res["3"][part]
+    assert res["3"]["latent"]["rank"] >= 1
