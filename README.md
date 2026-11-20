@@ -35,6 +35,14 @@ In a continuous latent, coarse-graining is invariance: states that differ only b
 
 **Consequences.** The goal is an information trade-off: as much about `s_t` as possible while `z_{t+k}` stays predictable from `z_t` and `m_t`. The prediction loss alone asks for closure but rewards collapse; reconstruction rewards resolution but asks for no closure. Prediction error says nothing alone, since shrinking lowers it; closure is measurable without labels as the gap between predicting `z_{t+k}` from `s_t` and from `z_t`. The stride sets the granularity.
 
+## Results
+
+**R1. Persistence at the stride coarse-grains, but drops what the action sets.** The ideal linear JEPA latent at k = 4, i.e. the most persistent linear modes of the `state` (VAMP: canonical correlation of `s_t` and `s_{t+4}` within episodes, 200k train pairs, no actions; read out by linear regression, R² on val):
+- Only 31 modes keep a canonical correlation above 0.9 (119 at k = 1).
+- The top 64 hold counts in view, not tiles: iron 0.93 (tile 0.04), table 0.93, zombie 0.87. The top 256 add quadrants (iron 0.79, zombie 0.67). The top 16 hold only inventory and energy.
+- The facing, set by the actions, drops out (0.07 at 64).
+- PCA with 64 dimensions keeps the facing (0.99) and common tiles, and loses rare content (iron in view 0.17).
+
 ## Hints
 
 What Grace, AAC and K2 have suggested so far. One seed each and often a different setting (pixels, a synthetic grid world): starting points, not results. Here everything is proven again. Runs: `runs/E0_k1`; `runs/archive/` and git tag `archive/k1-series` hold the rest.
