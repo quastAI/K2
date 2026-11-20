@@ -20,6 +20,8 @@ An encoder `z = E(s_t)` and a predictor `ẑ_{t+k} = P(z_t, m_t)` at stride `k =
 
 In a continuous latent, coarse-graining is invariance: states that differ only below the resolution map to the same point. Selection is invariance by deletion.
 
+**The ideal JEPA** (Tang et al. 2023, "Understanding Self-Predictive Learning for Reinforcement Learning": linear, stop-gradient, a predictor at its optimum): the latent's covariance stays fixed and the latent turns to the top-D eigenvectors of the policy-averaged transition operator, the D most persistent modes of the dynamics (for k steps, of its k-th power). Such modes are nearly constant on sets of states the dynamics rarely leaves and change smoothly between them: a soft coarse-graining. Two departures make it a slow-feature collapse: persistent is not predictable (a mode that changes fast but is set by the action ranks low, because the operator averages over actions), and a nonlinear encoder can fill the D places with smooth functions of the slow content (harmonics) first.
+
 **Closure.** `z = φ(s)` is closed at stride k when the full state adds nothing to the prediction of `z`'s future beyond `z` itself: `p(z_{t+k} | s_t, m_t) = p(z_{t+k} | z_t, m_t)`. Example: inventory alone is not closed, since whether wood is collected depends on the tile the player faces; a mob's quadrant is not closed while a mob near the border may cross it. Closure is the goal's "needed for the prediction"; determinism on top of it is the goal's "predictable". The identity map is closed but not deterministic, a constant map both but empty: closure alone does not pick a level, the goal's "as fine as possible" does.
 
 | Line of work | What it says | For this goal |
