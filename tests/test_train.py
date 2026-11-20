@@ -45,8 +45,9 @@ def test_e1_linear_resolution_readout(cache_dir, tmp_path):
     cfg = Config(variant="E1", arch="linear", k=2, steps=3, latent=8, batch=16, checkpoints=(0,), log_every=1,
                  device="cpu", cache=str(cache_dir), out=str(tmp_path / "E1"))  # fmt: skip
     train(cfg)
-    res = run_resolution(cfg.out, "cpu")
+    res = run_resolution(cfg.out, "cpu", mlp_steps=5)
     assert set(res) == {"0", "3"}
-    for part in ("holds", "foresees", "copy"):
+    assert 0 <= res["3"]["own"]["frames_exact"] <= res["3"]["own"]["factors_exact"] <= 1
+    for part in ("holds", "holds_mlp", "foresees", "copy"):
         assert "iron|quadrant" in res["3"][part] and "mobs|view" in res["3"][part]
     assert res["3"]["latent"]["rank"] >= 1

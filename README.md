@@ -66,25 +66,27 @@ In a continuous latent, coarse-graining is invariance: states that differ only b
 - Predictable content stays at full resolution: coal 0.92, iron 0.90, table 0.91, terrain 1.00 (own decoder); facing 0.98. Diamond tiles go (0.55).
 - The predictor beats copying only where the actions act: facing 0.70 (copying 0.00), terrain tiles 0.50 (0.31); counts not (ores in view 0.52 against 0.54).
 - The stop-gradient warm-up was unstable again (whitened error 8848 at step 1000) and recovered within 100 steps of the switch.
+- Goal (1) is far from met: the whitened error is still about 0.7 per direction, and the kept mob count is foreseen no better than by copying (0.32 against 0.31).
+- Readouts under-read: the reference holds the full state, yet MLP readouts give it 0.3 to 0.6 and vary by up to 0.08 with their sample. Information claims rest on the own decoder.
 
 ## Hints
 
-What Grace, AAC and K2 have suggested so far. One seed each and often a different setting (pixels, a synthetic grid world): starting points, not results. Here everything is proven again. Runs: `runs/E0_k1`; `runs/archive/` and git tag `archive/k1-series` hold the rest.
+What Grace, AAC and K2 have suggested so far. One seed each and often a different setting (pixels, a synthetic grid world): starting points, not results. Here everything is proven again. Runs: `runs/E0_k1`, `runs/E1_linear`, `runs/E1_linear256`; `runs/archive/` and git tag `archive/k1-series` hold the archived ones.
 
 **What a latent holds**
-- Reconstruction makes content available. SIGReg, alone or with prediction, holds almost none and can hurt (Grace: mob 0.39 with it, 0.93 without; AAC A5, SIGReg + inverse dynamics without prediction: mobs and ores lost as with prediction; K2 E1/E2: SIGReg's encoder gradient 10 to 90 times the prediction's, content below the untrained encoder).
+- Reconstruction makes content available. SIGReg, alone or with prediction, holds almost none and can hurt (Grace: mob 0.39 with it, 0.93 without; AAC A5, SIGReg + inverse dynamics without prediction: mobs and ores lost as with prediction; K2's archived SIGReg runs: SIGReg's encoder gradient 10 to 90 times the prediction's, content below the untrained encoder).
 - Slow content and its nonlinear copies nearly satisfy SIGReg; prediction alone favours slow content (Grace; AAC B1's latent: inventory, vitals, daylight kept, every block and mob type lost).
-- On the `state`, a gradient through the prediction target deleted content for good, while a detached target got it back late (AAC A3 against A4: zombie 0.18 / 0.67, iron 0.10 / 0.57 after 155k steps, close for the first 2k). K2's E1 and E2 ran 8k steps.
+- On the `state`, a gradient through the prediction target deleted content for good, while a detached target got it back late (AAC A3 against A4: zombie 0.18 / 0.67, iron 0.10 / 0.57 after 155k steps, close for the first 2k). K2's archived SIGReg runs ran 8k steps.
 - A plain mean reconstruction learns rare content slowly; weighting by error or class speeds it up (Grace; K2 E0: whitened linear probe rare 0.85 at 12k steps and still rising, the error-weighted stage 1 of the archived E3 0.87 at 10k).
 - Coarse facts survive where tiles do not: iron in view 0.50 against an iron-tile recall of 0.05, a table adjacent 0.85 (AAC B1).
 
 **What the planner's distance sees**
-- Low amplitude is not absence: a readout reads content that the planner's squared distance barely sees (Grace). A readout depends on the latent's shape: whitening lifted K2's E3 from rare 0.56 to 0.82 on the same latent.
+- Low amplitude is not absence: a readout reads content that the planner's squared distance barely sees (Grace). A readout depends on the latent's shape: whitening lifted K2's archived E3 from rare 0.56 to 0.82 on the same latent.
 - The distance is uneven. In AAC B1, in median one-step distances: sleeping 54, a tool 15 to 23, a pasted table next to the player 2.4, coal 1.5, zombie 0.45, cow 0.06, lava 0.02. In Grace a one-cell move outweighed a turn 6 times.
 - Planning with B1: success 0.18 against 0.11 for random (offset 8, 128 tasks); plans were predicted to close 39 % of the goal distance and opened it by 27 %; 0 of 6 zombie and 0 of 6 iron goals.
 
 **Prediction and selection**
-- The decoded prediction `D(P(z, a))` keeps what the predictor learned and releases noise; a hold on the real latent is needed because the predictor can draw action-determined content (the facing) from the action alone; fading the reconstruction alone erodes everything (Grace). A per-token gate cannot coarsen, and without a scale term the latent blew up along one direction (K2 E3: participation ratio 23.6 to 1.7).
+- The decoded prediction `D(P(z, a))` keeps what the predictor learned and releases noise; a hold on the real latent is needed because the predictor can draw action-determined content (the facing) from the action alone; fading the reconstruction alone erodes everything (Grace). A per-token gate cannot coarsen, and without a scale term the latent blew up along one direction (K2's archived E3: participation ratio 23.6 to 1.7).
 - Behaviour cloning and inverse dynamics over 8 steps rely on the zombie (0.12) and the near field, hardly on ores or lava (≤ 0.015; AAC).
 
 **Measurement**

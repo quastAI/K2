@@ -197,9 +197,10 @@ target latent, coarse-grains: it keeps a coarse, predictable version of content 
    a deep model is unlikely to rescue it.
 2. **Deep (GPU), only after stage 1 is read:** the token encoder, the same arms at the lam chosen from stage 1.
 
-Readouts per checkpoint (`readouts.run_resolution`, labels for evaluation only): R² on val of what z **holds**, what
-the predicted latent **foresees** at t+4, and what **copying** z_t gives, per group at tile / quadrant / view; the
-raw latent's participation ratio."""
+Readouts per checkpoint (`readouts.run_resolution`, labels for evaluation only): R² on val of what z **holds** (a
+linear and an MLP readout), what the predicted latent **foresees** at t+4, and what **copying** z_t gives, per group
+at tile / quadrant / view; the model's **own decoder** (frames and classes reconstructed exactly), the information
+test when readouts under-read; the raw latent's participation ratio."""
 
 E1_STAGE1 = """from IPython.display import Markdown
 from k2 import readouts, report, train
@@ -239,7 +240,9 @@ E1_TRAIN1 = """for cfg in runs().values():  # a finished run returns at once
 E1_READ1 = """for cfg in runs().values():
     readouts.run_resolution(cfg.out, "cpu", stride=K)
 labels = {name: cfg.out for name, cfg in runs().items()}
-Markdown("### What z holds (end)\\n" + report.resolution_table(labels, "holds")
+Markdown("### Own decoder (the information test)\\n" + report.own_table(labels)
+         + "\\n### What z holds, MLP readout (end)\\n" + report.resolution_table(labels, "holds_mlp")
+         + "\\n### What z holds, linear readout (end)\\n" + report.resolution_table(labels, "holds")
          + "\\n### What the predicted latent foresees at t + 4 (end)\\n" + report.resolution_table(labels, "foresees")
          + "\\n### Copying z_t (end)\\n" + report.resolution_table(labels, "copy"))"""
 
@@ -274,8 +277,10 @@ for cfg in runs_b.values():  # about 8.5 minutes each on the Mac CPU (0.051 s pe
     train.train(cfg)
     readouts.run_resolution(cfg.out, "cpu", stride=K)
 labels_b = {n: c.out for n, c in runs_b.items()}
-Markdown("### holds\\n" + report.resolution_table(labels_b, "holds")
-         + "\\n### foresees (the reference's predictor is untrained)\\n" + report.resolution_table(labels_b, "foresees"))"""
+Markdown("### Own decoder\\n" + report.own_table(labels_b)
+         + "\\n### holds, MLP readout\\n" + report.resolution_table(labels_b, "holds_mlp")
+         + "\\n### foresees (the reference's predictor is untrained)\\n" + report.resolution_table(labels_b, "foresees")
+         + "\\n### copy\\n" + report.resolution_table(labels_b, "copy"))"""
 
 E1_STAGE2 = """RUN_STAGE2 = False  # only after stage 1 is read: set LAM2 from it, then True (GPU)
 LAM2 = 1.0
@@ -288,8 +293,37 @@ if RUN_STAGE2:
     for cfg in runs2.values():
         train.train(cfg)
         readouts.run_resolution(cfg.out, stride=K)
-    Markdown(report.resolution_table({a: c.out for a, c in runs2.items()}, "holds")
-             + report.resolution_table({a: c.out for a, c in runs2.items()}, "foresees"))"""
+    labels2 = {a: c.out for a, c in runs2.items()}
+    Markdown(report.own_table(labels2) + report.resolution_table(labels2, "holds_mlp")
+             + report.resolution_table(labels2, "foresees") + report.resolution_table(labels2, "copy"))"""
+
+
+E1_STATUS = """## Status after stages 1 and 1b, and what comes next
+
+Results: README, R4 and R5. Answers to *What we want to learn*:
+1. **Core claim:** supported in the linear model at D = 256, one seed, one lam: the mobs' tiles go (own decoder at
+   chance), their count stays (MLP 0.72); predictable content stays at full resolution (ore and station tiles 0.90 or
+   more). Diamond tiles go although they are predictable.
+2. **Race:** yes at D = 64 (the target gradient from step 0 holds less); untested at D = 256.
+3. **lam:** three points at D = 64 only; no curve at D = 256.
+4. **Actions:** the facing is foreseen (0.70 to 0.81; copying 0.00).
+5. **Go or no-go:** the direction holds; the gaps below come first.
+
+Found on the way:
+- Goal (1) is far from met: the whitened error is still about 0.7 per direction, and the kept counts are foreseen no
+  better than by copying (mobs in view 0.32 against 0.31).
+- The stop-gradient phase with the whitened error is unstable (R4, R5). Without reconstruction nothing is deleted:
+  the whitening prevents the collapse, so row 4 of the hypothesis table did not hold here.
+- Readouts under-read: the linear autoencoder holds the full state (own decoder) while linear and MLP readouts give
+  0.2 to 0.6; the MLP readout varies by up to 0.08 with its sample. Information claims rest on the own decoder.
+
+Next, in order:
+1. *Done:* the readout reports the own decoder and an MLP (`run_resolution`); re-read stages 1 and 1b with it (about
+   20 s per checkpoint).
+2. A stable warm-up: lam = 0 (reconstruction only) until the switch, instead of the unstable stop-gradient phase. Then,
+   at D = 256: the target gradient from step 0 against the warm-up (the race), and lam 1, 3, 10, 30 (the curve).
+3. Why the predictor does not beat copying on counts: a stronger predictor (an MLP on z and the actions) or a larger lam.
+4. Stage 2 (deep, pod) with what holds from 2 and 3; seeds."""
 
 
 def e1_notebook():
@@ -311,6 +345,7 @@ def e1_notebook():
         code(E1_RACE1),
         md(E1_STAGE1B_MD),
         code(E1_STAGE1B),
+        md(E1_STATUS),
         md("## Stage 2: deep (GPU)\n\nOnly after stage 1 is read; the warm-up arm only if stage 1 or the first deep checkpoints show a race."),
         code(E1_STAGE2),
     ]

@@ -390,11 +390,43 @@ def _r2(pred: np.ndarray, y: np.ndarray) -> float:
     return float(1 - ((pred - y) ** 2).sum(0)[ok].sum() / sst[ok].sum()) if ok.any() else float("nan")
 
 
+def _mlp_readout(z_fit, y_fit: dict, z_ev, steps=2000, seed=0) -> dict:
+    """An MLP from the standardised latent to all content targets at once (standardised), fit on train frames:
+    {key: prediction on z_ev}. A linear readout under-reads latents whose content is a nonlinear function of z."""
+    from torch import nn
+
+    keys = list(y_fit)
+    y = np.concatenate([y_fit[key] for key in keys], 1)
+    mu, sd = y.mean(0), y.std(0) + 1e-3
+    zm, zs = z_fit.mean(0), z_fit.std(0) + 1e-6
+    x, t = ((z_fit - zm) / zs).float(), torch.as_tensor((y - mu) / sd, dtype=torch.float32)
+    torch.manual_seed(seed)
+    net = nn.Sequential(nn.Linear(x.shape[1], 512), nn.GELU(), nn.Linear(512, 512), nn.GELU(), nn.Linear(512, y.shape[1]))
+    opt = torch.optim.Adam(net.parameters(), lr=1e-3)
+    gen = torch.Generator().manual_seed(seed)
+    with torch.enable_grad():
+        for _ in range(steps):
+            i = torch.randint(len(x), (1024,), generator=gen)
+            loss = ((net(x[i]) - t[i]) ** 2).mean()
+            opt.zero_grad(set_to_none=True)
+            loss.backward()
+            opt.step()
+    with torch.no_grad():
+        pred = net(((z_ev - zm) / zs).float()).numpy() * sd + mu
+    out, o = {}, 0
+    for key in keys:
+        n = y_fit[key].shape[1]
+        out[key], o = pred[:, o : o + n], o + n
+    return out
+
+
 @torch.no_grad()
-def resolution_readout(model, cfg, frames, n_fit=30000, n_eval=20000, stride=None, seed=0) -> dict:
-    """R^2 on val, per class and resolution, of a ridge regression from the whitened latent (fit on train frames):
-    `holds` reads z_t; `foresees` reads the predicted z^_{t+k} against the content at t+k; `copy` reads z_t against the
-    content at t+k. Also the group means (terrain, ores and stations, mobs) and the raw latent's shape."""
+def resolution_readout(model, cfg, frames, n_fit=30000, n_eval=20000, stride=None, seed=0, mlp_steps=2000) -> dict:
+    """R^2 on val, per class and resolution: `holds` (a ridge regression from the whitened z_t) and `holds_mlp` (an MLP
+    from z_t, `mlp_steps` > 0); `foresees` reads the predicted z^_{t+k} against the content at t+k and `copy` z_t
+    against it (both by the ridge regression). `own`: the model's own decoder on the val frames (frames and factors
+    reconstructed exactly, class scores), the information test when the readouts under-read. Also the group means
+    (terrain, ores and stations, mobs) and the raw latent's shape."""
     from .data import flat_state
 
     train_frames, val = frames
@@ -422,6 +454,9 @@ def resolution_readout(model, cfg, frames, n_fit=30000, n_eval=20000, stride=Non
         flat_state({key: x[:, 1] for key, x in f.items()}).cpu().numpy())  # fmt: skip
     res = {"holds": {key: _r2(p, now[key]) for key, p in read(z[:, 0]).items()},
            "copy": {key: _r2(p, nxt[key]) for key, p in read(z[:, 0]).items()}}  # fmt: skip
+    if mlp_steps > 0:
+        mlp = _mlp_readout(z_fit, y_fit, z[:, 0].double().cpu(), mlp_steps, seed)
+        res["holds_mlp"] = {key: _r2(p, now[key]) for key, p in mlp.items()}
     if model.predictor is not None:
         zhat = torch.cat([model.predictor(z[a : a + 4096, :1], m[a : a + 4096]) for a in range(0, len(t0), 4096)])[:, 0]
         res["foresees"] = {key: _r2(p, nxt[key]) for key, p in read(zhat).items()}
@@ -430,10 +465,13 @@ def resolution_readout(model, cfg, frames, n_fit=30000, n_eval=20000, stride=Non
             for r in ("tile", "quadrant", "view"):
                 part[f"{gname}|{r}"] = float(np.mean([part[f"{c}|{r}"] for c in members]))
     res["latent"] = latent_stats(model.encoder, val, k)
+    if model.decoder is not None:
+        own = own_reconstruction(model, val, t0.numpy())
+        res["own"] = {"frames_exact": own["frames_exact"], "factors_exact": own["factors_exact"], **own["classes"]}
     return res
 
 
-def run_resolution(run_dir, device=None, stride=None, cache=None) -> dict:
+def run_resolution(run_dir, device=None, stride=None, cache=None, mlp_steps=2000) -> dict:
     """The resolution readout of every checkpoint of a run into `<run>/resolution.json` (steps already there skipped)."""
     run_dir = Path(run_dir)
     cfg = load_config(run_dir)
@@ -443,9 +481,9 @@ def run_resolution(run_dir, device=None, stride=None, cache=None) -> dict:
     frames = (Frames(load("train", cache or cfg.cache), device), Frames(load("val", cache or cfg.cache), device))
     for ckpt in sorted(run_dir.glob("ckpt_*.pt")):
         step = ckpt.stem.split("_")[1].lstrip("0") or "0"
-        if step not in results:
+        if "own" not in results.get(step, {}):  # missing, or read before the own decoder and the MLP readout
             _, model = load_model(ckpt, device)
-            results[step] = resolution_readout(model, cfg, frames, stride=stride)
+            results[step] = resolution_readout(model, cfg, frames, stride=stride, mlp_steps=mlp_steps)
             path.write_text(json.dumps(results, indent=1))
     return results
 

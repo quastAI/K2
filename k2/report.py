@@ -121,7 +121,7 @@ def write_report(run_dir) -> str:
 
 def resolution_table(runs: dict, part: str = "holds", step: str | None = None) -> str:
     """A markdown table from `<run>/resolution.json`, one row per run ({label: run_dir}), at `step` (default: the last):
-    R^2 of `part` (holds, foresees, copy) per group at tile / quadrant / view, the items, vitals and facing, and the
+    R^2 of `part` (holds, holds_mlp, foresees, copy) per group at tile / quadrant / view, the items, vitals and facing, and the
     raw latent's participation ratio."""
     groups = ("terrain", "ores and stations", "mobs")
     head = ["run", "step", *[f"{g} (tile / quadrant / view)" for g in groups], "items", "vitals", "facing", "PR"]
@@ -138,6 +138,28 @@ def resolution_table(runs: dict, part: str = "holds", step: str | None = None) -
         cells = [" / ".join(_f(r[f"{g}|{x}"], 2) for x in ("tile", "quadrant", "view")) for g in groups]
         cells += [_f(r[f"{n}|-"], 2) for n in ("items", "vitals", "facing")]
         lines.append(f"| {label} | {s} | " + " | ".join(cells) + f" | {_f(res[s]['latent']['participation_ratio'], 1)} |")
+    return "\n".join(lines) + "\n"
+
+
+def own_table(runs: dict, step: str | None = None) -> str:
+    """The models' own decoders on val (`resolution.json`, part `own`): frames and factors reconstructed exactly, and the
+    class scores of the mobs, the ores and stations, the terrain (means), and the facing."""
+    groups = {"mobs": ("zombie", "cow", "skeleton"), "ores and stations": ("coal", "iron", "diamond", "crafting_table", "furnace"),
+              "terrain": ("grass", "water", "stone", "tree", "sand", "path")}  # fmt: skip
+    head = ["run", "step", "frames exact", "factors exact", *groups, "facing"]
+    lines = ["| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
+    for label, run_dir in runs.items():
+        path = Path(run_dir) / "resolution.json"
+        if not path.exists():
+            continue
+        res = json.loads(path.read_text())
+        s = step if step is not None else max(res, key=int)
+        o = res.get(s, {}).get("own")
+        if o is None:
+            continue
+        cells = [_f(o["frames_exact"], 3), _f(o["factors_exact"], 3)]
+        cells += [_f(float(np.mean([o[c] for c in m if c in o])), 2) for m in groups.values()] + [_f(o.get("facing"), 2)]
+        lines.append(f"| {label} | {s} | " + " | ".join(cells) + " |")
     return "\n".join(lines) + "\n"
 
 
