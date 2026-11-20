@@ -1,8 +1,9 @@
 """The oracle table: what is predictable at stride k given the macro-action, before any model exists.
 
 For every sampled held-out frame t (`<split>_full.npz`, `sample`), the true state is restored from `full_state` and
-the k executed actions a_t .. a_{t+k-1} are replayed with N fresh step keys (no auto-reset). Per factor (token) of the
-outcome frame, `p` is the share of the N replays that match the most common outcome (`mode`).
+the k executed actions a_t .. a_{t+k-1} are replayed with N fresh step keys (no auto-reset). Per factor of the outcome
+frame (`layout.factor_values`: each tile's block and its mobs apart), `p` is the share of the N replays that match the
+most common outcome (`mode`).
 
 Predictable at a line c: p >= c. The main line is 1: all N replays agreed, no tuned number. The lines 0.9 and 0.75
 check that a result does not depend on it (the histogram of p has no gap to put a cut in). A factor *changes* when
@@ -35,8 +36,8 @@ def predictable(p: np.ndarray, line: float) -> np.ndarray:
 
 
 def changing(t: dict, table: dict) -> np.ndarray:
-    """(n, 82): the factor changes over the stride: some replay ends elsewhere than the start frame."""
-    start = layout.token_values(layout.take(table, t["rows"]))
+    """(n, 145): the factor changes over the stride: some replay ends elsewhere than the start frame."""
+    start = layout.factor_values(layout.take(table, t["rows"]))
     return (t["mode"] != start) | (t["p"] < 1)
 
 
@@ -55,7 +56,7 @@ def oracle_table(k: int, split="val", n_keys=64, cache_dir=CACHE_DIR, batch=64, 
     actions = table["action"][rows[:, None] + np.arange(k)].astype(np.int32)
     if np.any(actions < 0):
         raise ValueError("an action chunk crosses the end of an episode")
-    truth = layout.token_values(layout.take(table, rows + k))
+    truth = layout.factor_values(layout.take(table, rows + k))
     rng = np.random.default_rng(seed)
     p, p_true, mode = [], [], []
     for a in range(0, len(rows), batch):
@@ -63,7 +64,7 @@ def oracle_table(k: int, split="val", n_keys=64, cache_dir=CACHE_DIR, batch=64, 
         states = sim.unpack(full_state_of(full, rows[b]), batched=True)
         obs, _ = sim.sim().rollout_many(states, actions[b], sim.fresh_keys(rng, len(rows[b]), n_keys))
         obs = np.asarray(obs).reshape(-1, layout.STATE_DIM)
-        values = layout.token_values(layout.compress(obs)).reshape(len(rows[b]), n_keys, layout.NUM_TOKENS)
+        values = layout.factor_values(layout.compress(obs)).reshape(len(rows[b]), n_keys, layout.NUM_FACTORS)
         share, m = mode_share(values)
         p.append(share)
         mode.append(m)
@@ -100,8 +101,8 @@ def summary(t: dict, table: dict) -> str:
         f"at least that share of the replays agree on its outcome; the main line is all {n_keys} agreed, 0.9 and 0.75 "
         "check that a result does not depend on it. A factor changes when some replay ends elsewhere than the start "
         "frame, so every non-deterministic factor changes; the shares below cover the changing factors only "
-        f"(`*`: fewer than {FEW}). Tiles are egocentric: a step moves every tile, so most tile changes at small k are "
-        "the view shifting, not game events.",
+        f"(`*`: fewer than {FEW}). Each tile is two factors, its block type and its mobs; tiles are egocentric, so a "
+        "step that moves the player changes most block factors. Mob factors of empty tiles count in `Overall` only.",
         "",
         f"Overall: {chg.mean():.3f} of the {chg.size} factors change; of those, "
         + ", ".join(f"{predictable(p, line)[chg].mean():.3f} at {'all agreed' if line == 1 else f'p >= {line:g}'}"

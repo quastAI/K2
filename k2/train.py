@@ -179,9 +179,11 @@ def train(cfg: Config) -> Path:
             if step % cfg.log_every == 0 or step == 1:
                 row = {"step": step, "loss": loss.item(), "lr": sched.get_last_lr()[0],
                        "sec": round(time.time() - t0, 1), **logs}  # fmt: skip
-                if writer is None:
-                    writer = csv.DictWriter(log_file, fieldnames=list(row))
-                    if log_path.stat().st_size == 0:
+                if writer is None:  # a resumed run keeps its file's columns (newer logged values are left out)
+                    fresh = log_path.stat().st_size == 0
+                    names = list(row) if fresh else next(csv.reader(open(log_path)))
+                    writer = csv.DictWriter(log_file, fieldnames=names, extrasaction="ignore")
+                    if fresh:
                         writer.writeheader()
                 writer.writerow(row)
                 log_file.flush()

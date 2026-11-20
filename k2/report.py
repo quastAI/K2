@@ -25,22 +25,26 @@ ROLE = {
 NOT_SHOWN = {
     "E0": "E0 has no predictor: it says nothing about what a predictive loss keeps, only what this encoder can hold "
     "under reconstruction. Its scores are the reference for the other variants, not a pass mark.",
-    "E1": "One SIGReg weight (0.0225, AAC's 0.09 scaled from batch 128 to 512; not tuned for this encoder). A loss of content here can come from the target path or from its interplay with "
-    "that weight; E2 separates only the first.",
-    "E2": "One SIGReg weight (0.0225, as E1). Keeping content with a detached target does not mean it is kept for the right "
-    "reason: the kept-against-predictable table says whether what is kept is predictable.",
+    "E1": "One SIGReg weight. At 0.0225 (AAC's 0.09 scaled to batch 512) SIGReg's encoder gradient was 7 to 2000 times "
+    "the prediction's (`grad_rest_over_pred`), so the target path E2 removes hardly acted; a comparison with E2 means "
+    "something only at a weight where the two balance (Q2).",
+    "E2": "One SIGReg weight (as E1, the same caveat). Keeping content with a detached target does not mean it is kept "
+    "for the right reason: the kept-against-target table says whether what is kept is determined or needed.",
     "E3": "One switch step and one gate tolerance (tau, in nats per token), both heuristics; the stage-1 length is not "
-    "tuned (E0 was still rising at 12k steps). The gate releases what the predictor cannot foresee, including goal "
-    "events it has not learned yet (the design's open extension). The checkpoints before the switch are stage 1, the "
-    "ones after it stage 2: read them as the two stages, not as one curve.",
+    "tuned. The gate releases what the predictor cannot foresee now, including goal factors it has not learned yet. "
+    "Stage 2 has no term on the latent's scale (z_std grew from 0.25 to 5.3 in the first run). The checkpoints "
+    "before the switch are stage 1, the ones after it stage 2: read them as the two stages, not as one curve.",
 }
 COMMON = [
     "One seed per run.",
     "Held-out frames are the val worlds (all sources); test is kept for the planning headline.",
-    "The fresh decoder (2000 steps on 65k train frames) gives a lower bound on what the latent holds.",
-    "Predictable means the oracle's replays agree, at three lines (all agreed, 0.9, 0.75). All agreed is noisy at its "
-    "edge: a factor that deviates in a few percent of the replays can still pass. The shares cover the factors that "
-    "change; tiles are egocentric, so at small k most tile changes are the view shifting, not game events.",
+    "The readouts read z whitened on their train frames; the fresh decoder (2000 steps on 65k train frames) gives a "
+    "lower bound on what the latent holds. Classes the readout cannot read even from the raw state (`(low ceiling)`) "
+    "are shown but left out of the summaries.",
+    "The target is D ∪ G: determined (the oracle's replays agree, at three lines: all agreed, 0.9, 0.75) or a goal "
+    "factor (block types, items, vitals, sleeping). All agreed is noisy at its edge: a factor that deviates in a few "
+    "percent of the replays can still pass. Each tile is two factors, its block and its mobs; outside the target are "
+    "mostly the mob factors.",
 ]
 SUMMARY_KEYS = ("rare", "blocks", "mobs", "items", "vitals")
 
@@ -70,25 +74,29 @@ def write_report(run_dir) -> str:
     ]
     if (run_dir / "log.csv").exists():
         log = read_log(run_dir)
-        keys = [k for k in ("loss", "pred_over_copy", "recon", "sigreg", "z_std") if k in log]  # fmt: skip
+        keys = [k for k in ("loss", "pred_over_copy", "recon", "sigreg", "grad_rest_over_pred", "z_std") if k in log]
         lines += ["", "Training, last logged step " + str(int(log["step"][-1])) + ": "
                   + ", ".join(f"{k} {_f(log[k][-1])}" for k in keys) + "."]  # fmt: skip
     if not steps:
         return _write(run_dir, lines + ["", "No readouts yet."], cfg)
     last = res[steps[-1]]
 
-    lines += ["", "## 1. What the latent keeps (fresh decoder, val)", ""]
+    lines += ["", "## 1. What the latent keeps (fresh decoder on whitened z, val)", ""]
     head = ["class"] + [f"step {s}" for s in steps] + ([ctl_name] if ctl_last else [])
     lines += ["| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
     names = list(SUMMARY_KEYS) + L.class_order(list(last["fresh"]["classes"]))
     for n in names:
         get = lambda r: r["fresh"]["summary"].get(n) if n in SUMMARY_KEYS else r["fresh"]["classes"].get(n)  # noqa: E731
-        row = [f"**{n}**" if n in SUMMARY_KEYS else n] + [_f(get(res[s])) for s in steps]
+        label = f"**{n}**" if n in SUMMARY_KEYS else n + (" (low ceiling)" if n in L.LOW_CEILING else "")
+        row = [label] + [_f(get(res[s])) for s in steps]
         row += [_f(get(ctl_last))] if ctl_last else []
         lines.append("| " + " | ".join(row) + " |")
     lines += ["", "Linear probe, last step: " + ", ".join(f"{k} {_f(last['linear']['summary'][k])}" for k in SUMMARY_KEYS) + "."]
+    lines += ["", "The latent (participation ratio, rank, median slowness over one level-2 step): " + ", ".join(
+        f"step {s} {_f(res[s]['latent']['participation_ratio'], 1)}, {res[s]['latent']['rank']}, "
+        f"{_f(res[s]['latent']['slowness_median'])}" for s in steps if "latent" in res[s]) + "."]  # fmt: skip
 
-    lines += ["", "## 2. Kept against predictable (last step)", ""]
+    lines += ["", "## 2. Kept against the target D ∪ G (last step)", ""]
     if last.get("kept"):
         lines += kept_lines(last["kept"], ctl_last["kept"] if ctl_last and ctl_last.get("kept") else None, ctl_name)
         lines += ["", "Over the checkpoints (all changing factors, all agreed): " + ", ".join(
@@ -135,20 +143,21 @@ def _share(kept: int, n: int) -> str:
 
 
 def _pair(c: dict) -> str:
-    """Share of the predictable factors kept / of the unpredictable ones kept, counts in brackets."""
-    return f"{_share(c['pred_kept'], c['pred_kept'] + c['pred_dropped'])} / {_share(c['unpred_kept'], c['unpred_kept'] + c['unpred_dropped'])}"
+    """Share of the target factors kept / of the other ones kept, counts in brackets."""
+    t, o = c["target_kept"], c["other_kept"]
+    return f"{_share(t, t + c['target_dropped'])} / {_share(o, o + c['other_dropped'])}"
 
 
 def kept_lines(kept: dict, ctl: dict | None, ctl_name: str | None) -> list[str]:
-    """Kept against predictable per kind and per class: the unchanged factors kept, the changing ones kept, and per line of
-    the oracle the share of the predictable / unpredictable changing factors kept (`*`: fewer than 30 changing)."""
+    """Kept against the target per kind and per class: the unchanged factors kept, the changing ones kept, and per line
+    of the oracle the share of the target / other changing factors kept (`*`: fewer than 30 changing)."""
     from .oracle import FEW
 
     lines = [
         f"Oracle of {kept['n_keys']} fresh-key replays. Changing = some replay ends elsewhere than the start frame; "
-        "the unchanged factors are deterministic and listed apart (kept share, count). For the changing ones, per line: "
-        "predictable kept / unpredictable kept, counts in brackets; the main line is all replays agreed, the other two "
-        f"check that nothing depends on it. `*`: fewer than {FEW} changing factors, read with care.",
+        "the unchanged factors are determined and listed apart (kept share, count). For the changing ones, per line: "
+        "target kept / other kept, counts in brackets. Target = determined at that line (the main line is all replays "
+        f"agreed) or a goal factor. `*`: fewer than {FEW} changing factors, read with care.",
     ]
     for title, key, order in (("kind", "kinds", list(L.KINDS)), ("class", "classes", None)):
         group = kept[key]

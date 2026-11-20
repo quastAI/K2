@@ -57,6 +57,21 @@ def test_shapes_and_rollout():
     assert LinearDecoder(32)(z)["mob"].shape == (8, 3, L.TILES, L.NUM_MOBS)
 
 
+def test_readout_whitens_its_input():
+    """A latent stretched along one direction reads the same after whitening: zero mean, unit covariance; a direction
+    below 1e-6 of the largest variance is not blown up to unit variance (it would amplify numerical noise)."""
+    from k2.readouts import Whitened
+
+    torch.manual_seed(0)
+    z = torch.randn(4096, 8) @ torch.diag(torch.tensor([50.0, 1, 1, 1, 1, 1, 1, 0.5])) + 3.0
+    w = Whitened(LinearDecoder(8), z).white(z)
+    assert torch.allclose(w.mean(0), torch.zeros(8), atol=1e-3)
+    assert torch.allclose(torch.cov(w.T), torch.eye(8), atol=2e-2)
+    z[:, -1] = 3.0 + 1e-5 * torch.randn(4096)  # variance 1e-10 of the largest
+    w = Whitened(LinearDecoder(8), z).white(z)
+    assert torch.cov(w.T).diagonal().min() < 0.01
+
+
 def test_sigreg_prefers_gaussian():
     torch.manual_seed(0)
     s = SIGReg(num_proj=256)
@@ -75,6 +90,9 @@ def test_variants_train_and_e2_detaches_the_target():
         loss.backward()
         assert torch.isfinite(loss)
         assert all(p.grad is not None for p in model.encoder.parameters() if p.requires_grad)
+        if v != "E0":  # the gradient balance: prediction against SIGReg, on the encoder
+            assert logs["grad_pred"] > 0 and logs["grad_rest"] > 0
+            assert abs(logs["grad_rest_over_pred"] - logs["grad_rest"] / logs["grad_pred"]) < 1e-6
     # the prediction loss reaches the target's encoding in E1, not in E2
     grads = {}
     for v in ("E1", "E2"):
@@ -108,6 +126,7 @@ def test_e3_grace_model_two_stages():
             assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in part.parameters())
         keys[step] = set(logs)
     assert keys[0] == keys[5]  # one csv header across the switch
+    assert "grad_rest_over_pred" in keys[0]
     # without diag, stage 1 skips the gate's diagnostic terms
     cfg = small("E3", k=2, context=2, switch=5)
     _, logs = variant_loss(World(cfg), f, m, cfg, step=0, diag=False)

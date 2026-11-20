@@ -62,7 +62,7 @@ def test_oracle_mode_lines_and_changing():
     # changing: the mode differs from the start value, or the replays disagree
     table = synthetic_table()
     rows = np.array([0, 1, 2])
-    start = L.token_values(L.take(table, rows))
+    start = L.factor_values(L.take(table, rows))
     mode = start.copy()
     mode[0, 0] += 1  # a deterministic change
     p = np.ones(start.shape, np.float32)
@@ -76,9 +76,9 @@ def test_summary_text():
     table = synthetic_table()
     rows = np.arange(0, 20)
     n = len(rows)
-    mode = L.token_values(L.take(table, rows + 2))
+    mode = L.factor_values(L.take(table, rows + 2))
     t = {"k": np.int64(2), "split": "val", "n_keys": np.int64(64), "rows": rows, "mode": mode,
-         "p": np.ones((n, L.NUM_TOKENS), np.float32), "p_true": np.ones((n, L.NUM_TOKENS), np.float32)}  # fmt: skip
+         "p": np.ones((n, L.NUM_FACTORS), np.float32), "p_true": np.ones((n, L.NUM_FACTORS), np.float32)}  # fmt: skip
     text = summary(t, table)
     assert "| mobs" in text and "| daylight" in text and "all agreed" in text and "p >= 0.75" in text
 

@@ -4,7 +4,7 @@ AAC (`../AAC`, frozen) trained flat JEPA world models on Craftax-Classic pixels.
 
 ## Pruning
 
-- **The target path prunes early.** The Mac pilot before A3/A4 used an MLP encoder on the `state`, prediction plus SIGReg, with the gradient through the target. Its latent lost the mobs, the ores and the neighbouring tiles within about 100 steps. With the target detached (A4) it kept them and recovered. The pixel model B1 had lost the same things before its first checkpoint (epoch 1); after that, the prediction loss put little pressure on the latent.
+- **Early loss of content.** A Mac pilot (MLP encoder on the `state`, BatchNorm projector, prediction plus SIGReg, lr 1e-3, one epoch) lost the mobs, the ores and the neighbouring tiles within about 100 steps with the gradient through the target, and kept them with the target detached (A4). That pilot was deleted and never repeated; the A3/A4 race never ran. K2's E1/E2 did not reproduce it (`design.md`, F2 and F3). The pixel model B1 had lost the same things before its first checkpoint (epoch 1).
 - **B1's latent was a slow-feature latent.** SIGReg took its variance from slow, predictable quantities (inventory, vitals, the view's composition). Nothing demanded the rest of the view.
 - **Expensive and rare things were both lost.** In that data the two are confounded.
 

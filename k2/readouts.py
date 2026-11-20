@@ -1,16 +1,21 @@
 """Readouts of a run's checkpoints (evaluation only: nothing here reaches a training loss).
 
+0. The readout reads z whitened on its train frames (an invertible map: the information is the same, but a latent
+   whose scale exploded along one direction no longer starves the readout; design.md F13).
 1. What the latent keeps: a fresh decoder D' (and a linear probe) trained on frozen z of train frames with a
    class-balanced loss, scored on held-out frames (val) per class: recall per block type and mob, balanced accuracy
-   over the values of each item, vital, facing and sleeping, light within a tolerance.
-2. Kept against predictable: on the oracle's frames (`oracle_k<k>.npz`), per factor of the outcome frame, kept = D'
-   decodes it correctly from z, predictable = the oracle's p at a line (all replays agreed; 0.9 and 0.75 as checks).
-   A 2 x 2 table per kind and per class for the factors that change; the ones that do not change are reported apart
-   (kept count only). The headlines are the share of predictable factors kept and the share of unpredictable ones.
+   over the values of each item, vital, facing and sleeping, light within a tolerance. The summaries leave out the
+   classes the readout cannot read even from the raw state (`layout.LOW_CEILING`).
+2. Kept against the target: on the oracle's frames (`oracle_k<k>.npz`), per factor of the outcome frame (each tile's
+   block and its mobs apart), kept = D' decodes it correctly from z; the target is D ∪ G: determined (the oracle's p
+   at a line: all replays agreed; 0.9 and 0.75 as checks) or a goal factor (`layout.GOAL_FACTORS`). A 2 x 2 table per
+   kind and per class for the factors that change; the ones that do not change are reported apart (kept count only).
 3. Prediction: per class, the error of D'(z^_{j+h}) after an H-step rollout, over the error of copying the last
    context frame; also the error of D'(z_{j+h}) (the decoder's own floor) and the latent error over copying.
 4. Geometry: along expert paths of H level-2 steps, the rank correlation of ||z_j - z_goal|| with the steps to go,
    and the share of steps that bring z closer to the goal.
+5. The latent itself: participation ratio and rank of z, and the median slowness of its whitened directions over one
+   level-2 step (0: constant, 2: unrelated).
 
     python -m k2.readouts runs/E1_k1
 """
@@ -31,6 +36,8 @@ from .losses import token_losses
 from .model import Decoder, LinearDecoder
 from .oracle import LINES, changing, load_oracle, predictable
 from .train import limit_threads, load_config, load_model
+
+VERSION = 2  # readouts of another version are computed again
 
 
 @torch.no_grad()
@@ -68,18 +75,40 @@ def balanced_weights(f: dict, cap=100.0) -> dict:
     }
 
 
+class Whitened(torch.nn.Module):
+    """A readout that whitens its input first: (z - mean) W with W from the eigenvectors of z's covariance on the
+    readout's train frames (directions below 1e-6 of the largest variance are floored there)."""
+
+    def __init__(self, dec: torch.nn.Module, z: torch.Tensor):
+        super().__init__()
+        self.dec = dec
+        zd = z.detach().double().cpu()
+        mean = zd.mean(0)
+        ev, U = torch.linalg.eigh(torch.cov((zd - mean).T))
+        ev = ev.clamp(min=0) + 1e-6 * ev.max()
+        self.register_buffer("mean", mean.float().to(z.device))
+        self.register_buffer("W", (U / ev.sqrt()).float().to(z.device))
+
+    def white(self, z: torch.Tensor) -> torch.Tensor:
+        return (z - self.mean) @ self.W
+
+    def forward(self, z: torch.Tensor) -> dict:
+        return self.dec(self.white(z))
+
+
 def fit_decoder(z: torch.Tensor, f: dict, kind="fresh", steps=2000, batch=1024, lr=1e-3, seed=0, latent_cfg=None):
-    """A decoder (`fresh`: the model's decoder architecture; `linear`: the probe) trained on frozen z (n, D)."""
+    """A readout (`fresh`: the model's decoder architecture; `linear`: the probe) trained on frozen, whitened z (n, D)."""
     torch.manual_seed(seed)
     d = z.shape[-1]
     dec = (Decoder(d, *latent_cfg) if latent_cfg else Decoder(d)) if kind == "fresh" else LinearDecoder(d)
-    dec = dec.to(z.device)
+    dec = Whitened(dec.to(z.device), z)
+    zw = dec.white(z)
     w = balanced_weights(f)
-    opt = torch.optim.Adam(dec.parameters(), lr=lr)
+    opt = torch.optim.Adam(dec.dec.parameters(), lr=lr)
     gen = torch.Generator(device=z.device).manual_seed(seed)
     for _ in range(steps):
         i = torch.randint(len(z), (batch,), device=z.device, generator=gen)
-        loss = token_losses(dec(z[i]), {k: v[i] for k, v in f.items()}, w).mean()
+        loss = token_losses(dec.dec(zw[i]), {k: v[i] for k, v in f.items()}, w).mean()
         opt.zero_grad(set_to_none=True)
         loss.backward()
         opt.step()
@@ -100,11 +129,11 @@ def predicted(out: dict) -> dict:
 
 
 def correct(pred: dict, f: dict) -> np.ndarray:
-    """Per factor (n, 82): the decoded frame matches the true one (a tile: its block and every mob bit)."""
-    tile = (pred["block"] == f["block"]) & (pred["mob"] == f["mob"]).all(-1)
+    """Per factor (n, 145): the decoded frame matches the true one (a tile's block; a tile's mobs: every mob bit)."""
     out = torch.cat(
         [
-            tile,
+            pred["block"] == f["block"],
+            (pred["mob"] == f["mob"]).all(-1),
             pred["item"] == f["item"],
             pred["vital"] == f["vital"],
             (pred["facing"] == f["facing"])[..., None],
@@ -118,7 +147,8 @@ def correct(pred: dict, f: dict) -> np.ndarray:
 
 def class_scores(pred: dict, f: dict) -> dict:
     """Per class: block recall, mob balanced accuracy, balanced accuracy over the values of every item, vital, facing,
-    sleeping; light within the tolerance. Also the head means and the mean over the rare classes."""
+    sleeping; light within the tolerance. Also the head means and the mean over the rare classes, without the classes
+    the readout cannot read even from the raw state (`LOW_CEILING`)."""
     pred = {k: v.cpu().numpy() for k, v in pred.items()}
     f = {k: v.cpu().numpy() for k, v in f.items()}
 
@@ -142,42 +172,42 @@ def class_scores(pred: dict, f: dict) -> dict:
     s["facing"] = bal(pred["facing"], f["facing"])
     s["light"] = float(np.mean(np.abs(pred["light"] - f["light"]) <= L.LIGHT_TOLERANCE))
     s["sleeping"] = bal(pred["sleep"], f["sleep"])
-    blocks = [s[n] for n in L.BLOCKS if n in s]
-    rare = [s[n] for n in L.RARE_BLOCKS + L.MOBS if n in s]
-    summary = {"blocks": float(np.mean(blocks)), "mobs": float(np.mean([s[n] for n in L.MOBS if n in s])),
-               "rare": float(np.mean(rare)), "items": float(np.mean([s[f"item_{n}"] for n in L.ITEMS])),
-               "vitals": float(np.mean([s[n] for n in L.VITALS]))}  # fmt: skip
+    readable = lambda names: [s[n] for n in names if n in s and n not in L.LOW_CEILING]  # noqa: E731
+    summary = {"blocks": float(np.mean(readable(L.BLOCKS))), "mobs": float(np.mean(readable(L.MOBS))),
+               "rare": float(np.mean(readable(L.RARE_BLOCKS + L.MOBS))),
+               "items": float(np.mean(readable([f"item_{n}" for n in L.ITEMS]))),
+               "vitals": float(np.mean(readable(L.VITALS)))}  # fmt: skip
     return {"classes": s, "summary": summary}
 
 
-def count_2x2(kept: np.ndarray, pred: np.ndarray, mask: np.ndarray) -> dict:
-    """Kept against predictable over the factors in `mask`."""
+def count_2x2(kept: np.ndarray, target: np.ndarray, mask: np.ndarray) -> dict:
+    """Kept against the target over the factors in `mask`."""
     return {
-        "pred_kept": int((mask & pred & kept).sum()), "pred_dropped": int((mask & pred & ~kept).sum()),
-        "unpred_kept": int((mask & ~pred & kept).sum()), "unpred_dropped": int((mask & ~pred & ~kept).sum()),
+        "target_kept": int((mask & target & kept).sum()), "target_dropped": int((mask & target & ~kept).sum()),
+        "other_kept": int((mask & ~target & kept).sum()), "other_dropped": int((mask & ~target & ~kept).sum()),
     }  # fmt: skip
 
 
-def kept_vs_predictable(encoder, dec, val: Frames, oracle: dict) -> dict:
-    """Kept against predictable on the oracle's outcome frames, per kind and per class, for the factors that change and
-    (apart) the ones that do not. Kept: D'(z) decodes the factor of the outcome frame correctly. Per line of the
-    oracle (`LINES`, keys "1", "0.9", "0.75") the 2 x 2 counts of the changing factors; the unchanged ones are
-    deterministic by definition, so only their kept count is given."""
+def kept_vs_target(encoder, dec, val: Frames, oracle: dict) -> dict:
+    """Kept against the target D ∪ G on the oracle's outcome frames, per kind and per class, for the factors that change
+    and (apart) the ones that do not. Kept: D'(z) decodes the factor of the outcome frame correctly. Target at a line
+    of the oracle (`LINES`, keys "1", "0.9", "0.75"): determined at that line, or a goal factor. The unchanged factors
+    are determined by definition, so only their kept count is given."""
     k = int(oracle["k"])
     rows = torch.as_tensor(oracle["rows"] + k)
     kept = correct(predicted(decode(dec, encode(encoder, val, rows))), val.frames(rows))
     chg = changing(oracle, val.table)
-    pred = {f"{line:g}": predictable(oracle["p"], line) for line in LINES}
+    target = {f"{line:g}": predictable(oracle["p"], line) | L.GOAL_FACTORS for line in LINES}
     c = L.take(val.table, oracle["rows"] + k)
 
     def stats(mask):
         still, moving = mask & ~chg, mask & chg
         return {"unchanged": {"n": int(still.sum()), "kept": int((still & kept).sum())},
                 "changing": {"n": int(moving.sum()), "kept": int((moving & kept).sum()),
-                             "by_line": {line: count_2x2(kept, p, moving) for line, p in pred.items()}}}  # fmt: skip
+                             "by_line": {line: count_2x2(kept, t, moving) for line, t in target.items()}}}  # fmt: skip
 
     return {
-        "lines": list(pred), "n_keys": int(oracle["n_keys"]), "all": stats(np.ones_like(kept)),
+        "lines": list(target), "n_keys": int(oracle["n_keys"]), "all": stats(np.ones_like(kept)),
         "kinds": {n: stats(m) for n, m in L.kind_masks(c).items()},
         "classes": {n: stats(m) for n, m in L.factor_classes(c).items()},
     }  # fmt: skip
@@ -199,7 +229,7 @@ def prediction(model, dec, val: Frames, cfg, horizon=8, n=2048, seed=0) -> dict:
         true = {k: v[:, c - 1 + h] for k, v in f.items()}
         ok_pred = correct(predicted(dec(zhat[:, h - 1])), true)
         ok_real = correct(predicted(dec(z[:, c - 1 + h])), true)
-        tv = lambda x: L.token_values({**{k: v.cpu().numpy() for k, v in x.items()}, "mob": _mob_byte(x["mob"])})  # noqa: E731
+        tv = lambda x: L.factor_values({**{k: v.cpu().numpy() for k, v in x.items()}, "mob": _mob_byte(x["mob"])})  # noqa: E731
         ok_copy = tv(last) == tv(true)
         classes = L.factor_classes({k: (v.cpu().numpy() if k != "mob" else _mob_byte(v)) for k, v in true.items()})
         per = {}
@@ -236,6 +266,25 @@ def geometry(encoder, val: Frames, k: int, horizon=8, n=512, seed=0) -> dict:
     return {"spearman": float(np.nanmean(rho)), "closer_share": float(closer.mean())}
 
 
+@torch.no_grad()
+def latent_stats(encoder, val: Frames, k: int, n=8192, seed=0) -> dict:
+    """Participation ratio and rank (eigenvalues above 1e-6 of the largest) of z, and the median slowness of z's
+    whitened directions over one level-2 step: per direction E[dy^2] with unit variance (0 constant, 2 unrelated)."""
+    pool = val.starts(k, 1)
+    g = np.random.default_rng(seed)
+    t0 = pool[torch.as_tensor(g.choice(len(pool), min(n, len(pool)), replace=False), device=val.device)]
+    f, _ = val.steps(t0, k, 1)
+    z = torch.cat([encoder({key: x[a : a + 2048] for key, x in f.items()}) for a in range(0, len(t0), 2048)])
+    z = z.double().cpu()
+    x = z.flatten(0, 1)
+    ev, U = torch.linalg.eigh(torch.cov((x - x.mean(0)).T))
+    keep = ev > ev.max() * 1e-6
+    d = (z[:, 1] - z[:, 0]) @ (U[:, keep] / ev[keep].sqrt())
+    slow = torch.linalg.eigvalsh(d.T @ d / len(d))
+    return {"participation_ratio": float(ev.sum() ** 2 / (ev**2).sum()), "rank": int(keep.sum()),
+            "slowness_median": float(slow.median())}  # fmt: skip
+
+
 def readout_checkpoint(path, cache, device, decoder_steps=2000, n_train=65536, n_eval=16384, horizon=8,
                        frames=None) -> dict:  # fmt: skip
     cfg, model = load_model(path, device)
@@ -245,36 +294,44 @@ def readout_checkpoint(path, cache, device, decoder_steps=2000, n_train=65536, n
     ev = torch.as_tensor(g.choice(len(val), min(n_eval, len(val)), replace=False))
     z_tr, z_ev = encode(model.encoder, train_frames, tr), encode(model.encoder, val, ev)
     f_tr, f_ev = train_frames.frames(tr), val.frames(ev)
-    res = {}
+    res = {"version": VERSION}
     decs = {}
     for kind in ("fresh", "linear"):
         dec = fit_decoder(z_tr, f_tr, kind, decoder_steps, latent_cfg=(cfg.width, cfg.dec_layers, cfg.heads))
         decs[kind] = dec
         res[kind] = class_scores(predicted(decode(dec, z_ev)), f_ev)
     try:
-        res["kept"] = kept_vs_predictable(model.encoder, decs["fresh"], val, load_oracle(cfg.k, cache))
+        res["kept"] = kept_vs_target(model.encoder, decs["fresh"], val, load_oracle(cfg.k, cache))
     except FileNotFoundError:
         res["kept"] = None
     if model.predictor is not None:
         res["prediction"] = prediction(model, decs["fresh"], val, cfg, horizon)
     res["geometry"] = geometry(model.encoder, val, cfg.k, horizon)
+    res["latent"] = latent_stats(model.encoder, val, cfg.k)
     return res
 
 
-def run_readouts(run_dir, device=None, decoder_steps=2000, n_train=65536, n_eval=16384, horizon=8) -> dict:
-    """Readouts of every checkpoint of a run into `<run>/readouts.json` (steps already there are skipped)."""
+def run_readouts(run_dir, device=None, decoder_steps=2000, n_train=65536, n_eval=16384, horizon=8, cache=None) -> dict:
+    """Readouts of every checkpoint of a run into `<run>/readouts.json` (steps already read out by this version are
+    skipped). `cache` overrides the run's cache folder (a run trained on another machine)."""
     run_dir = Path(run_dir)
     cfg = load_config(run_dir)
     device = device or cfg.device
+    cache = cache or cfg.cache
     path = run_dir / "readouts.json"
     results = json.loads(path.read_text()) if path.exists() else {}
-    frames = (Frames(load("train", cfg.cache), device), Frames(load("val", cfg.cache), device))
+    stale = {s: r for s, r in results.items() if r.get("version") != VERSION}
+    if stale:  # readouts of an older version are kept once, under their version's name
+        backup = run_dir / f"readouts_v{next(iter(stale.values())).get('version', 1)}.json"
+        if not backup.exists():
+            backup.write_text(json.dumps(stale, indent=1))
+    results = {s: r for s, r in results.items() if r.get("version") == VERSION}
+    frames = (Frames(load("train", cache), device), Frames(load("val", cache), device))
     for ckpt in sorted(run_dir.glob("ckpt_*.pt")):
         step = int(ckpt.stem.split("_")[1])
         if str(step) in results:
             continue
-        results[str(step)] = readout_checkpoint(ckpt, cfg.cache, device, decoder_steps, n_train, n_eval, horizon,
-                                                frames)  # fmt: skip
+        results[str(step)] = readout_checkpoint(ckpt, cache, device, decoder_steps, n_train, n_eval, horizon, frames)
         path.write_text(json.dumps(results, indent=1))
         print(f"readouts of step {step}: rare {results[str(step)]['fresh']['summary']['rare']:.3f}")
     return results
@@ -288,9 +345,10 @@ def main(argv=None):
     p.add_argument("--n-train", type=int, default=65536)
     p.add_argument("--n-eval", type=int, default=16384)
     p.add_argument("--horizon", type=int, default=8)
+    p.add_argument("--cache", default=None, help="the cache folder, if not the one in the run's config")
     a = p.parse_args(argv)
     limit_threads()
-    run_readouts(a.run, a.device, a.decoder_steps, a.n_train, a.n_eval, a.horizon)
+    run_readouts(a.run, a.device, a.decoder_steps, a.n_train, a.n_eval, a.horizon, a.cache)
 
 
 if __name__ == "__main__":

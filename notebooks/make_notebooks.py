@@ -130,6 +130,13 @@ def notebook(vid, control, title):
         md("## Report"),
         code(REPORT),
     ]
+    return finish(nb)
+
+
+def finish(nb):
+    """Fixed cell ids (nbformat draws random ones, which would change every notebook on every write) and the kernel."""
+    for i, cell in enumerate(nb.cells):
+        cell["id"] = f"cell-{i:02d}"
     nb.metadata["kernelspec"] = {"name": "python3", "display_name": "Python 3", "language": "python"}
     return nb
 

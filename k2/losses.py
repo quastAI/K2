@@ -79,6 +79,21 @@ def error_weights(loss: torch.Tensor, power: float, cap: float) -> torch.Tensor:
         return (w / w.mean()).clamp(max=cap)
 
 
+def gradient_balance(model, loss: torch.Tensor, pred_loss: torch.Tensor, logs: dict):
+    """The norms of the encoder gradients of the prediction term and of the rest of the loss (SIGReg in E1/E2; the
+    reconstruction or decoded terms in E3), and rest over prediction: which term shapes the encoder (design.md F3)."""
+    if not (torch.is_grad_enabled() and loss.requires_grad):
+        return
+    params = list(model.encoder.parameters())
+
+    def norm(term):
+        grads = torch.autograd.grad(term, params, retain_graph=True, allow_unused=True)
+        return float(torch.sqrt(sum(g.square().sum() for g in grads if g is not None)))
+
+    gp, gr = norm(pred_loss), norm(loss - pred_loss)
+    logs.update(grad_pred=gp, grad_rest=gr, grad_rest_over_pred=gr / max(gp, 1e-12))
+
+
 def grace_loss(model, f: dict, m: torch.Tensor, cfg, z: torch.Tensor, step: int, diag: bool, logs: dict):
     """E3. `diag`: also compute the other stage's terms without gradient, so that every logged row has the same keys."""
     stage2 = step >= cfg.switch
@@ -105,6 +120,7 @@ def grace_loss(model, f: dict, m: torch.Tensor, cfg, z: torch.Tensor, step: int,
             logs.update(stage=2 if stage2 else 1, recon=rec.item(), pred=pred_loss.item(), copy=copy.item(),
                         pred_over_copy=(pred_loss / copy.clamp(min=1e-12)).item(), decoded_pred=dp.mean().item(),
                         gated_recon=gated.item(), gate_open=gate.mean().item(), gate_shut=(gate < 0.1).float().mean().item())  # fmt: skip
+        gradient_balance(model, loss, pred_loss, logs)
     return loss, logs
 
 
@@ -129,4 +145,7 @@ def variant_loss(model, f: dict, m: torch.Tensor, cfg, sigreg: SIGReg | None = N
         logs.update(pred=pred_loss.item(), copy=copy.item(), pred_over_copy=(pred_loss / copy.clamp(min=1e-12)).item())
     sig = sigreg(z.transpose(0, 1))
     logs.update(sigreg=sig.item())
-    return pred_loss + cfg.sigreg_weight * sig, logs
+    loss = pred_loss + cfg.sigreg_weight * sig
+    if diag:
+        gradient_balance(model, loss, pred_loss, logs)
+    return loss, logs

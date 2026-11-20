@@ -13,8 +13,7 @@ K2 studies the level-2 selection problem of a hierarchical JEPA world model on C
 
 - **Self-contained.** K2 never imports from or links to AAC at runtime. AAC is a reference to read; what K2 needs is rewritten here, small and adapted. The data files are read by path, never copied.
 - **Minimal and clean.** Build only what the current step of `docs/design.md` needs: one encoder, one predictor, one loss module, one readout set. No config framework, no generality "for later", no options nobody runs. Remove what a finished step no longer needs.
-- **One notebook per variant.** `notebooks/<ID>.ipynb` (E0, E1, ...) runs that variant end to end: data check, training, readouts, report. The notebooks share the code in the package and differ only in their configuration cell.
-- **Targeted, clean experiments.** Each experiment answers one open question carried over from AAC (`docs/design.md`, "Order of work"). It is compared against its control and reported with what it does not show.
+- **One notebook per variant.** `notebooks/<ID>.ipynb` (E0, E1, ...) runs that variant end to end: data check, training, readouts, report. The notebooks share the code in the package and differ only in their configuration cell.- **Targeted, clean experiments.** Each experiment answers one open question carried over from AAC (`docs/design.md`, "Order of work"). It is compared against its control and reported with what it does not show.
 - **Two sides with a file boundary.**
   - **Simulator side:** JAX on the CPU, run on the Mac. It builds the data cache, runs the replay test and computes the oracle table, and writes plain `.npz` files.
   - **Model side:** PyTorch, trained on a RunPod GPU. It holds the encoder, predictor, losses, training and readouts, and reads those files.

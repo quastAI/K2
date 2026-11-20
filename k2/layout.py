@@ -14,8 +14,8 @@ The compact form keeps the same frame exactly in 148 bytes:
     light   (n,)    float32
     sleep   (n,)    uint8
 
-Tokens (the factors of the oracle and the readouts) are in this order: 63 tiles, 12 items, 4 vitals, facing, light,
-sleeping (82).
+Tokens (the model's unit) are in this order: 63 tiles, 12 items, 4 vitals, facing, light, sleeping (82). Factors (the
+unit of the oracle and the readouts) split each tile into its block and its mobs (145).
 """
 
 from __future__ import annotations
@@ -72,11 +72,34 @@ TOKEN_NAMES = (
 )
 LIGHT_TOLERANCE = 0.05  # a decoded light level within this counts as correct
 
+# Factors, the unit of the oracle and of kept-against-target: each tile is two factors, its block type and its mob
+# bits (one tile factor would count a grass tile a cow may step on as undetermined terrain), then the items, vitals,
+# facing, light and sleeping (145).
+BLOCK_FACTORS = slice(0, TILES)
+MOB_FACTORS = slice(TILES, 2 * TILES)
+ITEM_FACTORS = slice(2 * TILES, 2 * TILES + NUM_ITEMS)
+VITAL_FACTORS = slice(ITEM_FACTORS.stop, ITEM_FACTORS.stop + NUM_VITALS)
+FACING_FACTOR = VITAL_FACTORS.stop
+LIGHT_FACTOR = FACING_FACTOR + 1
+SLEEP_FACTOR = FACING_FACTOR + 2
+NUM_FACTORS = SLEEP_FACTOR + 1
+
+# G, the goal factors: what the goal test reads at the next level-2 boundary, determined or not (design.md, "The goal")
+GOAL_FACTORS = np.zeros(NUM_FACTORS, bool)
+for _s in (BLOCK_FACTORS, ITEM_FACTORS, VITAL_FACTORS):
+    GOAL_FACTORS[_s] = True
+GOAL_FACTORS[SLEEP_FACTOR] = True
+
 # the rare classes of the readouts (the sapling, once placed, is the block `plant`)
 RARE_BLOCKS = ["coal", "iron", "diamond", "lava", "crafting_table", "furnace", "plant"]
 
-# kinds of things: groups of the readout classes (a tile counts for its block type and for each mob on it). Light is
-# its own kind: it changes every step (the day clock) and would drown the player's own state.
+# classes the readout cannot read even from the raw `state` (fresh decoder, 2000 steps: 0.33 to 0.67, design.md F12):
+# shown in the tables, left out of the summaries
+LOW_CEILING = ["item_diamond", "item_wood_pickaxe", "item_stone_pickaxe", "item_iron_pickaxe", "item_wood_sword",
+               "item_stone_sword", "item_iron_sword", "health", "light", "ripe_plant"]  # fmt: skip
+
+# kinds of things: groups of the readout classes (a block factor counts for its block type, a mob factor for each mob
+# on it). Light is its own kind: it changes every step (the day clock) and would drown the player's own state.
 KINDS = {
     "mobs": MOBS,
     "ores": ["coal", "iron", "diamond"],
@@ -160,24 +183,41 @@ def token_values(c: dict) -> np.ndarray:
     )
 
 
+def factor_values(c: dict) -> np.ndarray:
+    """One integer per factor (n, 145): block id per tile, mob bits per tile, item count, vital value, facing, light in
+    steps of 1e-4, sleeping. Two frames have the same factor exactly when the integers match."""
+    return np.concatenate(
+        [
+            c["block"].astype(np.int64),
+            c["mob"].astype(np.int64),
+            c["item"].astype(np.int64),
+            c["vital"].astype(np.int64),
+            c["facing"].astype(np.int64)[:, None],
+            np.rint(c["light"].astype(np.float64) * 1e4).astype(np.int64)[:, None],
+            c["sleep"].astype(np.int64)[:, None],
+        ],
+        1,
+    )
+
+
 def factor_classes(c: dict) -> dict[str, np.ndarray]:
-    """Boolean masks (n, 82) of the factors of every readout class, read from the true frames `c`. A tile counts for its
-    block type and for each mob on it; every item, vital, facing, light and sleeping is a class of its own. Classes
-    with no factor in `c` are left out."""
+    """Boolean masks (n, 145) of the factors of every readout class, read from the true frames `c`: a block factor counts
+    for its block type, a mob factor for each mob on the tile (mob factors of empty tiles are in no class); every item,
+    vital, facing, light and sleeping is a class of its own. Classes with no factor in `c` are left out."""
     n = len(c["block"])
     out = {}
     for b, name in enumerate(BLOCKS):
-        m = np.zeros((n, NUM_TOKENS), bool)
-        m[:, TILE_TOKENS] = c["block"] == b
+        m = np.zeros((n, NUM_FACTORS), bool)
+        m[:, BLOCK_FACTORS] = c["block"] == b
         out[name] = m
     for j, name in enumerate(MOBS):
-        m = np.zeros((n, NUM_TOKENS), bool)
-        m[:, TILE_TOKENS] = (c["mob"] >> j) & 1 > 0
+        m = np.zeros((n, NUM_FACTORS), bool)
+        m[:, MOB_FACTORS] = (c["mob"] >> j) & 1 > 0
         out[name] = m
     singles = [f"item_{x}" for x in ITEMS] + VITALS + ["facing", "light", "sleeping"]
     for i, name in enumerate(singles):
-        m = np.zeros((n, NUM_TOKENS), bool)
-        m[:, ITEM_TOKENS.start + i] = True
+        m = np.zeros((n, NUM_FACTORS), bool)
+        m[:, ITEM_FACTORS.start + i] = True
         out[name] = m
     return {k: v for k, v in out.items() if v.any()}
 
@@ -189,7 +229,7 @@ def class_order(names) -> list[str]:
 
 
 def kind_masks(c: dict) -> dict[str, np.ndarray]:
-    """Boolean masks (n, 82) of the factors of every kind (`KINDS`) in the true frames `c`."""
+    """Boolean masks (n, 145) of the factors of every kind (`KINDS`) in the true frames `c`."""
     classes = factor_classes(c)
     out = {}
     for kind, members in KINDS.items():
