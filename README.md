@@ -47,6 +47,12 @@ In a continuous latent, coarse-graining is invariance: states that differ only b
 
 **R2. No timescale gap: the level of abstraction is a choice, not given by the game.** Implied timescales `-k / ln σ_i` of the same linear modes at k = 1, 2, 4, 8, 16: apart from 2 to 5 nearly conserved progress modes, they fall off smoothly (k = 4, modes 5 / 10 / 20 / 40 / 80: 770 / 176 / 61 / 21 / 12 steps; no ratio above 1.6 between neighbours). Modes 20 to 80 keep their timescale within a factor of about 1.5 for k ≥ 4. The rates span far more than the factor 2 of Klindt et al.
 
+**R3. What only the action makes predictable at k = 4 is mainly the facing and where the view moves.** Two identical MLPs predict the change of the content from `s_t` to `s_{t+4}`, one from `s_t`, one from `s_t` and the 4 actions (R² on val; 4000 steps each, a lower bound):
+- Facing: 0.29 without, 0.83 with the actions.
+- Blocks in view: +0.03 to +0.16 at every resolution (the player's moves shift the egocentric view).
+- Mobs: no gain; even with the actions, zombie in view 0.61, cow 0.48, arrow 0.24.
+- Inventory and vitals: no gain beyond copying (0.87 to 0.99); within 4 steps they rarely change.
+
 ## Hints
 
 What Grace, AAC and K2 have suggested so far. One seed each and often a different setting (pixels, a synthetic grid world): starting points, not results. Here everything is proven again. Runs: `runs/E0_k1`; `runs/archive/` and git tag `archive/k1-series` hold the rest.
