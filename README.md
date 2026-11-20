@@ -61,6 +61,12 @@ In a continuous latent, coarse-graining is invariance: states that differ only b
 - Stop-gradient with the whitened error is unstable at lam ≥ 1 (the whitened error explodes, z shrinks to 0.02): the normalisation gets no gradient.
 - At D = 64 no arm can represent tiles (0.04 or less), so coarse-graining against deletion is not tested yet.
 
+**R5. E1, linear stage 1b (D = 256): the mobs' tiles are dropped, their count is kept: coarse-graining.** Target gradient after a 1000-step warm-up, reconstruction, lam 10, against a linear autoencoder of the same size (lam 0); 10000 steps, one seed. The reference holds the full state (its own decoder reconstructs 94 % of the val frames exactly, every class at 0.96 or more), so the information test is the own decoder plus a nonlinear (MLP) readout; linear readouts under-read the reference.
+- Mobs: the own decoder reads mob tiles at chance (zombie 0.65, cow 0.54, skeleton 0.52; reference 1.00); MLP readout tile / quadrant / view 0.06 / 0.46 / 0.71 (reference 0.38 / 0.55 / 0.64).
+- Predictable content stays at full resolution: coal 0.92, iron 0.90, table 0.91, terrain 1.00 (own decoder); facing 0.98. Diamond tiles go (0.55).
+- The predictor beats copying only where the actions act: facing 0.70 (copying 0.00), terrain tiles 0.50 (0.31); counts not (ores in view 0.52 against 0.54).
+- The stop-gradient warm-up was unstable again (whitened error 8848 at step 1000) and recovered within 100 steps of the switch.
+
 ## Hints
 
 What Grace, AAC and K2 have suggested so far. One seed each and often a different setting (pixels, a synthetic grid world): starting points, not results. Here everything is proven again. Runs: `runs/E0_k1`; `runs/archive/` and git tag `archive/k1-series` hold the rest.
