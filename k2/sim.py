@@ -126,34 +126,6 @@ def replay_episode(seed: int, actions: np.ndarray) -> np.ndarray:
     return np.concatenate([np.asarray(s.observe(state))[None], np.asarray(obs)])
 
 
-class RealEnv:
-    """The real environment of a task: restored from `full_state`, stepped with the episode's true keys."""
-
-    def __init__(self, full_state: np.ndarray, seed: int):
-        self.state = unpack(full_state)
-        self.key = true_step_key(seed)
-        self.start_achievements = self.achievements()
-
-    def step(self, action: int) -> np.ndarray:
-        self.state = sim().step(self.state, self.key, jnp.int32(action))
-        return self.obs()
-
-    def obs(self) -> np.ndarray:
-        return np.asarray(sim().observe(self.state), dtype=np.float32)
-
-    def achievements(self) -> np.ndarray:
-        return np.asarray(self.state.achievements, dtype=bool)
-
-    def dead(self) -> bool:
-        return bool(sim().env.is_terminal(self.state, sim().params))
-
-
-def new_achievements(current: np.ndarray, goal: np.ndarray, start: np.ndarray) -> bool:
-    """AAC's goal test: every achievement the goal has and the start lacks is unlocked (and there is one)."""
-    required = goal.astype(bool) & ~start.astype(bool)
-    return bool(required.any() and current.astype(bool)[required].all())
-
-
 # --- the guard: the replay contract holds on this machine ----------------------------------------------------------
 
 FLOAT_TOLERANCE = 1e-6  # the light level: a GPU (where the data was collected) and a CPU differ in its last bits

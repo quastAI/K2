@@ -42,10 +42,6 @@ def test_factor_values_and_classes():
     expect = np.ones_like(covered)
     expect[:, L.MOB_FACTORS] = c["mob"] > 0
     np.testing.assert_array_equal(covered, expect)
-    # the goal factors: block types, items, vitals, sleeping; not the mobs, facing or light
-    g = L.GOAL_FACTORS
-    assert g[L.BLOCK_FACTORS].all() and g[L.ITEM_FACTORS].all() and g[L.VITAL_FACTORS].all() and g[L.SLEEP_FACTOR]
-    assert not g[L.MOB_FACTORS].any() and not g[L.FACING_FACTOR] and not g[L.LIGHT_FACTOR]
 
 
 def test_kinds():

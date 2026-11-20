@@ -5,7 +5,6 @@ from k2 import sim
 
 from .conftest import synthetic_table
 from k2.oracle import changing, mode_share, predictable, summary
-from k2.plan import categorical_cem
 
 
 def test_pack_unpack_round_trip():
@@ -39,18 +38,6 @@ def test_true_key_replay_matches_stepping():
         np.testing.assert_array_equal(np.asarray(sim.sim().observe(env_state)), obs[t + 1])
 
 
-def test_goal_test():
-    start = np.zeros(22, bool)
-    goal = start.copy()
-    goal[[0, 3]] = True
-    cur = start.copy()
-    cur[0] = True
-    assert not sim.new_achievements(cur, goal, start)
-    cur[3] = True
-    assert sim.new_achievements(cur, goal, start)
-    assert not sim.new_achievements(cur, start, start)  # no progress: never a success
-
-
 def test_oracle_mode_lines_and_changing():
     values = np.array([[[1], [1], [2], [1]]])  # (n=1, R=4, F=1)
     p, mode = mode_share(values)
@@ -81,9 +68,3 @@ def test_summary_text():
          "p": np.ones((n, L.NUM_FACTORS), np.float32), "p_true": np.ones((n, L.NUM_FACTORS), np.float32)}  # fmt: skip
     text = summary(t, table)
     assert "| mobs" in text and "| daylight" in text and "all agreed" in text and "p >= 0.75" in text
-
-
-def test_categorical_cem_finds_the_minimum():
-    target = np.array([3, 1, 4, 1, 5])
-    best, cost = categorical_cem(lambda s: (s != target).sum(1), 5, 8, 64, 8, 8, 0.5, 0.05, np.random.default_rng(0))
-    np.testing.assert_array_equal(best, target)

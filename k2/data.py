@@ -69,10 +69,3 @@ def flat_state(f: dict) -> torch.Tensor:
         ],
         -1,
     )
-
-
-def from_states(states: np.ndarray, device="cpu") -> dict:
-    """Torch frames from raw observations (n, 1345), e.g. the simulator's."""
-    c = layout.compress(np.asarray(states).reshape(-1, layout.STATE_DIM))
-    tmp = Frames({**c, "action": np.zeros(len(c["block"]), np.int8)}, device)
-    return tmp.frames(torch.arange(len(c["block"]), device=tmp.device))

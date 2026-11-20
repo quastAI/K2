@@ -1,10 +1,9 @@
-"""Training of one variant: Adam, linear warmup then a constant learning rate, batch 512. E3 switches from stage 1 to
-stage 2 at step `switch` with a fresh optimiser state (same rate, no new warmup), as the Grace recipe's fork does.
+"""Training of one variant: Adam, linear warmup then a constant learning rate, batch 512.
 
 The run directory holds `config.json`, `log.csv` (every `log_every` steps), the checkpoints `ckpt_<step>.pt` at the
 steps in `checkpoints` and at the end, and `last.pt` (every `save_every` steps; a restart resumes from it).
 
-    python -m k2.train --variant E1 --k 1 --steps 8000 --out runs/E1_k1
+    python -m k2.train --variant E0 --k 1 --steps 12000 --out runs/E0_k1
 """
 
 from __future__ import annotations
@@ -23,10 +22,10 @@ import torch
 
 from .cache import CACHE_DIR, load
 from .data import Frames
-from .losses import SIGReg, variant_loss
+from .losses import variant_loss
 from .model import World
 
-VARIANTS = ("E0", "E1", "E2", "E3")
+VARIANTS = ("E0",)
 
 
 @dataclass
@@ -49,21 +48,6 @@ class Config:
     pred_width: int = 256
     pred_layers: int = 3
     dec_layers: int = 2
-    # losses
-    # AAC's 0.09 at batch 128, scaled to batch 512: SIGReg's statistic grows with the batch, the prediction loss is a
-    # mean, so the weight scales as 1 / batch to keep AAC's balance (change it with the batch)
-    sigreg_weight: float = 0.0225
-    sigreg_proj: int = 1024
-    # E3, the Grace model (no SIGReg): stage 1 before `switch`, stage 2 from it on (switch >= steps: stage 1 only, extend
-    # by resuming with more steps). rec_weight: stage 1's reconstruction against the prediction loss (Grace: 0.3).
-    # error weights from the tokens' own losses: (loss / mean)^error_power, mean 1, capped at error_cap (Grace: 1, 20).
-    # gate_tau: the gate's tolerance on the per-token loss of the decoded prediction, in nats (a heuristic: a token
-    # predicted with p = 0.9 has about 0.1 and keeps a weight of about 0.35; a coin flip has 0.69 and about 0.001)
-    switch: int = 10000
-    rec_weight: float = 0.3
-    error_power: float = 1.0
-    error_cap: float = 20.0
-    gate_tau: float = 0.1
     # data: all sources (0 expert, 3 early checkpoint), as AAC's level 1; an open decision
     sources: tuple = (0, 3)
     checkpoints: tuple = (0, 100, 300, 1000, 3000)
@@ -103,7 +87,7 @@ def save_config(cfg: Config, out: Path):
 
 
 def _config(d: dict) -> Config:
-    """A Config from a stored dict; settings the Config no longer has (E3's ramp, in older runs) are dropped."""
+    """A Config from a stored dict; settings the Config no longer has (in older runs) are dropped."""
     names = {f.name for f in dataclasses.fields(Config)}
     return Config(**{k: v for k, v in d.items() if k in names})
 
@@ -135,7 +119,6 @@ def train(cfg: Config) -> Path:
     frames = Frames(load("train", cfg.cache), device)
     pool = frames.starts(cfg.k, cfg.context, cfg.sources)
     model = World(cfg).to(device)
-    sigreg = SIGReg(num_proj=cfg.sigreg_proj).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=cfg.lr)
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: min(1.0, (s + 1) / max(cfg.warmup, 1)))
     step = 0
@@ -144,7 +127,11 @@ def train(cfg: Config) -> Path:
         model.load_state_dict(blob["model"])
         opt.load_state_dict(blob["opt"])
         sched.load_state_dict(blob["sched"])
-        gen.set_state(blob["gen"])
+        try:
+            gen.set_state(blob["gen"])
+        except RuntimeError:  # saved on another device (CUDA and CPU generator states differ)
+            gen.manual_seed(cfg.seed + blob["step"])
+            print("batch generator reseeded: last.pt was saved on another device")
         step = blob["step"]
         print(f"resumed at step {step}")
     keep = set(checkpoint_steps(cfg))
@@ -161,14 +148,11 @@ def train(cfg: Config) -> Path:
                 save(out / f"ckpt_{step:06d}.pt")
             if step >= cfg.steps:
                 break
-            if cfg.variant == "E3" and step == cfg.switch and step > 0:
-                opt.state.clear()  # stage 2: a fresh optimiser state, the same rate
-                print(f"stage 2 from step {step}")
             model.train()
             idx = torch.randint(len(pool), (cfg.batch,), device=device, generator=gen)
             f, m = frames.steps(pool[idx], cfg.k, cfg.context)
             diag = (step + 1) % cfg.log_every == 0 or step == 0
-            loss, logs = variant_loss(model, f, m, cfg, sigreg, step=step, diag=diag)
+            loss, logs = variant_loss(model, f, m, cfg, step=step, diag=diag)
             if not math.isfinite(loss.item()):
                 raise FloatingPointError(f"loss is {loss.item()} at step {step}")
             opt.zero_grad(set_to_none=True)

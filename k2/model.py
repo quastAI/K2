@@ -1,8 +1,7 @@
 """Encoder, predictor and decoder (PyTorch).
 
 Encoder: a frame tokenizer (63 tile tokens, 12 item tokens, 4 vital tokens, facing, light, sleeping), a transformer,
-cross-attention pooling with Q learned queries (Q x query_dim) and a linear projector into the latent. No final
-LayerNorm: SIGReg could not shape the latent through one.
+cross-attention pooling with Q learned queries (Q x query_dim) and a linear projector into the latent.
 
 Predictor: a causal transformer over the C context steps of (z, m); residual output z_{j+1} = z_j + f(...).
 
@@ -171,7 +170,7 @@ class LinearDecoder(nn.Module):
 
 
 class World(nn.Module):
-    """The modules of one variant: the encoder always, the predictor unless E0, the decoder in E0 and E3."""
+    """The modules of one variant: encoder and decoder always, the predictor unless E0."""
 
     def __init__(self, cfg):
         super().__init__()
@@ -180,4 +179,4 @@ class World(nn.Module):
             Predictor(cfg.latent, cfg.k, cfg.context, cfg.pred_width, cfg.pred_layers, cfg.heads)
             if cfg.variant != "E0" else None
         )  # fmt: skip
-        self.decoder = Decoder(cfg.latent, cfg.width, cfg.dec_layers, cfg.heads) if cfg.variant in ("E0", "E3") else None
+        self.decoder = Decoder(cfg.latent, cfg.width, cfg.dec_layers, cfg.heads)

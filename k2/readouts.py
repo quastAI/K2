@@ -1,23 +1,20 @@
 """Readouts of a run's checkpoints (evaluation only: nothing here reaches a training loss).
 
-0. The readout reads z whitened on its train frames (an invertible map: the information is the same, but a latent
-   whose scale exploded along one direction no longer starves the readout; design.md F13).
-1. What the latent keeps: a fresh decoder D' (and a linear probe) trained on frozen z of train frames with a
+1. What the latent holds: a fresh decoder D' (and a linear probe) trained on frozen z of train frames with a
    class-balanced loss, scored on held-out frames (val) per class: recall per block type and mob, balanced accuracy
-   over the values of each item, vital, facing and sleeping, light within a tolerance. The summaries leave out the
-   classes the readout cannot read even from the raw state (`layout.LOW_CEILING`).
-2. Kept against the target: on the oracle's frames (`oracle_k<k>.npz`), per factor of the outcome frame (each tile's
-   block and its mobs apart), kept = D' decodes it correctly from z; the target is D ∪ G: determined (the oracle's p
-   at a line: all replays agreed; 0.9 and 0.75 as checks) or a goal factor (`layout.GOAL_FACTORS`). A 2 x 2 table per
-   kind and per class for the factors that change; the ones that do not change are reported apart (kept count only).
-3. Prediction: per class, the error of D'(z^_{j+h}) after an H-step rollout, over the error of copying the last
+   over the values of each item, vital, facing and sleeping, light within a tolerance. The readouts read z whitened on
+   their train frames (invertible, so the information is the same; a raw latent stretched along a few directions
+   starves a short readout). The summaries leave out the classes the readout cannot read even from the raw state
+   (`layout.LOW_CEILING`).
+2. Prediction: per class, the error of D'(z^_{j+h}) after an H-step rollout, over the error of copying the last
    context frame; also the error of D'(z_{j+h}) (the decoder's own floor) and the latent error over copying.
-4. Geometry: along expert paths of H level-2 steps, the rank correlation of ||z_j - z_goal|| with the steps to go,
-   and the share of steps that bring z closer to the goal.
-5. The latent itself: participation ratio and rank of z, and the median slowness of its whitened directions over one
-   level-2 step (0: constant, 2: unrelated).
+3. The raw latent's shape: participation ratio and rank of z, and the median slowness of its whitened directions over
+   one level-2 step (0: constant, 2: unrelated).
+4. Capacity: the model's own decoder on val frames, the share of frames and of factors reconstructed exactly.
+5. What the planner's distance sees: how far the raw latent moves when one factor of the state is edited, in units of
+   the median distance between frames one level-2 step apart.
 
-    python -m k2.readouts runs/E1_k1
+    python -m k2.readouts runs/E0_k1
 """
 
 from __future__ import annotations
@@ -34,10 +31,9 @@ from .cache import load
 from .data import Frames
 from .losses import token_losses
 from .model import Decoder, LinearDecoder
-from .oracle import LINES, changing, load_oracle, predictable
 from .train import limit_threads, load_config, load_model
 
-VERSION = 2  # readouts of another version are computed again
+VERSION = 3  # readouts of another version are computed again
 
 
 @torch.no_grad()
@@ -180,39 +176,6 @@ def class_scores(pred: dict, f: dict) -> dict:
     return {"classes": s, "summary": summary}
 
 
-def count_2x2(kept: np.ndarray, target: np.ndarray, mask: np.ndarray) -> dict:
-    """Kept against the target over the factors in `mask`."""
-    return {
-        "target_kept": int((mask & target & kept).sum()), "target_dropped": int((mask & target & ~kept).sum()),
-        "other_kept": int((mask & ~target & kept).sum()), "other_dropped": int((mask & ~target & ~kept).sum()),
-    }  # fmt: skip
-
-
-def kept_vs_target(encoder, dec, val: Frames, oracle: dict) -> dict:
-    """Kept against the target D ∪ G on the oracle's outcome frames, per kind and per class, for the factors that change
-    and (apart) the ones that do not. Kept: D'(z) decodes the factor of the outcome frame correctly. Target at a line
-    of the oracle (`LINES`, keys "1", "0.9", "0.75"): determined at that line, or a goal factor. The unchanged factors
-    are determined by definition, so only their kept count is given."""
-    k = int(oracle["k"])
-    rows = torch.as_tensor(oracle["rows"] + k)
-    kept = correct(predicted(decode(dec, encode(encoder, val, rows))), val.frames(rows))
-    chg = changing(oracle, val.table)
-    target = {f"{line:g}": predictable(oracle["p"], line) | L.GOAL_FACTORS for line in LINES}
-    c = L.take(val.table, oracle["rows"] + k)
-
-    def stats(mask):
-        still, moving = mask & ~chg, mask & chg
-        return {"unchanged": {"n": int(still.sum()), "kept": int((still & kept).sum())},
-                "changing": {"n": int(moving.sum()), "kept": int((moving & kept).sum()),
-                             "by_line": {line: count_2x2(kept, t, moving) for line, t in target.items()}}}  # fmt: skip
-
-    return {
-        "lines": list(target), "n_keys": int(oracle["n_keys"]), "all": stats(np.ones_like(kept)),
-        "kinds": {n: stats(m) for n, m in L.kind_masks(c).items()},
-        "classes": {n: stats(m) for n, m in L.factor_classes(c).items()},
-    }  # fmt: skip
-
-
 @torch.no_grad()
 def prediction(model, dec, val: Frames, cfg, horizon=8, n=2048, seed=0) -> dict:
     """Per class and horizon h = 1 .. H: error of the decoded rollout, of the decoded true latent, and of copying."""
@@ -249,24 +212,6 @@ def _mob_byte(mob: torch.Tensor) -> np.ndarray:
 
 
 @torch.no_grad()
-def geometry(encoder, val: Frames, k: int, horizon=8, n=512, seed=0) -> dict:
-    """Along expert paths of `horizon` level-2 steps: Spearman of distance to the goal with the steps to go, and the
-    share of steps that bring the latent closer to the goal."""
-    pool = val.starts(k, horizon, sources=(0,))
-    g = np.random.default_rng(seed)
-    t0 = pool[torch.as_tensor(g.choice(len(pool), min(n, len(pool)), replace=False), device=val.device)]
-    f, _ = val.steps(t0, k, horizon)
-    z = encoder(f)
-    d = (z - z[:, -1:]).norm(dim=-1)[:, :-1].cpu().numpy()  # (n, H): distance at steps to go H .. 1
-    togo = np.arange(horizon, 0, -1)
-    rank = lambda x: np.argsort(np.argsort(x, -1), -1)  # noqa: E731
-    rd, rt = rank(d), rank(np.broadcast_to(togo, d.shape))
-    rho = [np.corrcoef(a, b)[0, 1] if a.std() > 0 else np.nan for a, b in zip(rd, rt)]
-    closer = np.diff(np.concatenate([d, np.zeros((len(d), 1))], 1), axis=1) < 0
-    return {"spearman": float(np.nanmean(rho)), "closer_share": float(closer.mean())}
-
-
-@torch.no_grad()
 def latent_stats(encoder, val: Frames, k: int, n=8192, seed=0) -> dict:
     """Participation ratio and rank (eigenvalues above 1e-6 of the largest) of z, and the median slowness of z's
     whitened directions over one level-2 step: per direction E[dy^2] with unit variance (0 constant, 2 unrelated)."""
@@ -285,9 +230,86 @@ def latent_stats(encoder, val: Frames, k: int, n=8192, seed=0) -> dict:
             "slowness_median": float(slow.median())}  # fmt: skip
 
 
-def readout_checkpoint(path, cache, device, decoder_steps=2000, n_train=65536, n_eval=16384, horizon=8,
-                       frames=None) -> dict:  # fmt: skip
+@torch.no_grad()
+def own_reconstruction(model, val: Frames, rows) -> dict:
+    """The model's own decoder on val frames: the share of frames reconstructed exactly (all 145 factors), the share of
+    factors, and the class scores. Does the latent hold the whole state?"""
+    f = val.frames(torch.as_tensor(rows))
+    pred = predicted(decode(model.decoder, encode(model.encoder, val, rows)))
+    ok = correct(pred, f)
+    return {"frames_exact": float(ok.all(1).mean()), "factors_exact": float(ok.mean()), **class_scores(pred, f)}
+
+
+EDIT_BLOCKS = ["grass", "water", "stone", "tree", "sand", "path", "coal", "iron", "diamond", "crafting_table", "furnace",
+               "lava", "plant"]  # fmt: skip
+RINGS = {1: [(3, 3), (3, 5), (2, 4), (4, 4)], 3: [(3, 1), (3, 7), (0, 4), (6, 4)]}  # tiles 1 and 3 away from the player
+
+
+def _frames_of(c: dict, device) -> dict:
+    """Torch frames from a compact batch."""
+    tmp = Frames({**c, "action": np.zeros(len(c["block"]), np.int8)}, device)
+    return tmp.frames(torch.arange(len(c["block"]), device=tmp.device))
+
+
+@torch.no_grad()
+def sensitivity(encoder, val: Frames, k: int, n=1024, seed=0) -> dict:
+    """What the planner's distance ||z - z_goal|| sees of each factor: edit one factor of a val state and measure how far
+    the raw latent moves, in units of the median distance between frames one level-2 step (k frames) apart. Per edit,
+    the median over the frames where the edit changes something. Edited states need not be reachable in the game.
+    `unrelated frame`: the distance to another, random val frame, for scale."""
+    g = np.random.default_rng(seed)
+    pool = val.starts(k, 1).cpu().numpy()
+    t0 = g.choice(pool, min(n, len(pool)), replace=False)
+    c = L.take(val.table, t0)
+
+    def enc(cc):
+        f = _frames_of(cc, val.device)
+        return torch.cat([encoder({key: x[a : a + 2048] for key, x in f.items()}) for a in range(0, len(t0), 2048)])
+
+    z0 = enc(c)
+    unit = (encode(encoder, val, t0 + k) - z0).norm(dim=-1).median().item()
+    out = {"unrelated frame": float((encode(encoder, val, g.permutation(t0)) - z0).norm(dim=-1).median() / unit)}
+
+    def record(name, cc, changed):
+        if changed.any():
+            idx = torch.as_tensor(np.nonzero(changed)[0], device=z0.device)
+            out[name] = float(((enc(cc) - z0)[idx]).norm(dim=-1).median() / unit)
+
+    rows = np.arange(len(t0))
+    for r, tiles in RINGS.items():
+        pick = np.array([t[0] * L.COLS + t[1] for t in tiles])[g.integers(0, len(tiles), len(t0))]
+        for b in EDIT_BLOCKS:
+            cc = {key: v.copy() for key, v in c.items()}
+            bi = L.BLOCKS.index(b)
+            changed = cc["block"][rows, pick] != bi
+            cc["block"][rows, pick] = bi
+            record(f"block {b}, {r} away", cc, changed)
+        for j, m in enumerate(L.MOBS):
+            cc = {key: v.copy() for key, v in c.items()}
+            bit = np.uint8(1 << j)
+            changed = (cc["mob"][rows, pick] & bit) == 0
+            cc["mob"][rows, pick] |= bit
+            record(f"mob {m}, {r} away", cc, changed)
+    for field, names in (("item", L.ITEMS), ("vital", L.VITALS)):
+        for i, name in enumerate(names):
+            cc = {key: v.copy() for key, v in c.items()}
+            v = cc[field][:, i]
+            cc[field][:, i] = np.where(v < L.LEVELS - 1, v + 1, v - 1)
+            record(f"{field} {name} ±1", cc, np.ones(len(t0), bool))
+    cc = {key: v.copy() for key, v in c.items()}
+    cc["facing"] = (cc["facing"] + 1) % 4
+    record("facing", cc, np.ones(len(t0), bool))
+    cc = {key: v.copy() for key, v in c.items()}
+    cc["sleep"] = 1 - cc["sleep"]
+    record("sleeping", cc, np.ones(len(t0), bool))
+    return {"k": k, "unit": unit, "edits": out}
+
+
+def readout_checkpoint(path, device, decoder_steps=2000, n_train=65536, n_eval=16384, horizon=8,
+                       frames=None, stride=None) -> dict:  # fmt: skip
+    """`stride`: the level-2 stride the latent's slowness and the edit distances are measured in (default: the run's k)."""
     cfg, model = load_model(path, device)
+    stride = stride or cfg.k
     train_frames, val = frames
     g = np.random.default_rng(0)
     tr = torch.as_tensor(g.choice(len(train_frames), min(n_train, len(train_frames)), replace=False))
@@ -300,18 +322,17 @@ def readout_checkpoint(path, cache, device, decoder_steps=2000, n_train=65536, n
         dec = fit_decoder(z_tr, f_tr, kind, decoder_steps, latent_cfg=(cfg.width, cfg.dec_layers, cfg.heads))
         decs[kind] = dec
         res[kind] = class_scores(predicted(decode(dec, z_ev)), f_ev)
-    try:
-        res["kept"] = kept_vs_target(model.encoder, decs["fresh"], val, load_oracle(cfg.k, cache))
-    except FileNotFoundError:
-        res["kept"] = None
     if model.predictor is not None:
         res["prediction"] = prediction(model, decs["fresh"], val, cfg, horizon)
-    res["geometry"] = geometry(model.encoder, val, cfg.k, horizon)
-    res["latent"] = latent_stats(model.encoder, val, cfg.k)
+    res["latent"] = latent_stats(model.encoder, val, stride)
+    if model.decoder is not None:
+        res["own"] = own_reconstruction(model, val, ev)
+    res["sensitivity"] = sensitivity(model.encoder, val, stride)
     return res
 
 
-def run_readouts(run_dir, device=None, decoder_steps=2000, n_train=65536, n_eval=16384, horizon=8, cache=None) -> dict:
+def run_readouts(run_dir, device=None, decoder_steps=2000, n_train=65536, n_eval=16384, horizon=8, cache=None,
+                 stride=None) -> dict:  # fmt: skip
     """Readouts of every checkpoint of a run into `<run>/readouts.json` (steps already read out by this version are
     skipped). `cache` overrides the run's cache folder (a run trained on another machine)."""
     run_dir = Path(run_dir)
@@ -331,7 +352,7 @@ def run_readouts(run_dir, device=None, decoder_steps=2000, n_train=65536, n_eval
         step = int(ckpt.stem.split("_")[1])
         if str(step) in results:
             continue
-        results[str(step)] = readout_checkpoint(ckpt, cache, device, decoder_steps, n_train, n_eval, horizon, frames)
+        results[str(step)] = readout_checkpoint(ckpt, device, decoder_steps, n_train, n_eval, horizon, frames, stride)
         path.write_text(json.dumps(results, indent=1))
         print(f"readouts of step {step}: rare {results[str(step)]['fresh']['summary']['rare']:.3f}")
     return results
@@ -346,9 +367,10 @@ def main(argv=None):
     p.add_argument("--n-eval", type=int, default=16384)
     p.add_argument("--horizon", type=int, default=8)
     p.add_argument("--cache", default=None, help="the cache folder, if not the one in the run's config")
+    p.add_argument("--stride", type=int, default=None, help="the level-2 stride of the latent readouts (default: the run's k)")
     a = p.parse_args(argv)
     limit_threads()
-    run_readouts(a.run, a.device, a.decoder_steps, a.n_train, a.n_eval, a.horizon, a.cache)
+    run_readouts(a.run, a.device, a.decoder_steps, a.n_train, a.n_eval, a.horizon, a.cache, a.stride)
 
 
 if __name__ == "__main__":

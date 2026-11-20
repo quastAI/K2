@@ -84,16 +84,10 @@ LIGHT_FACTOR = FACING_FACTOR + 1
 SLEEP_FACTOR = FACING_FACTOR + 2
 NUM_FACTORS = SLEEP_FACTOR + 1
 
-# G, the goal factors: what the goal test reads at the next level-2 boundary, determined or not (design.md, "The goal")
-GOAL_FACTORS = np.zeros(NUM_FACTORS, bool)
-for _s in (BLOCK_FACTORS, ITEM_FACTORS, VITAL_FACTORS):
-    GOAL_FACTORS[_s] = True
-GOAL_FACTORS[SLEEP_FACTOR] = True
-
 # the rare classes of the readouts (the sapling, once placed, is the block `plant`)
 RARE_BLOCKS = ["coal", "iron", "diamond", "lava", "crafting_table", "furnace", "plant"]
 
-# classes the readout cannot read even from the raw `state` (fresh decoder, 2000 steps: 0.33 to 0.67, design.md F12):
+# classes the readout cannot read even from the raw `state` (fresh decoder, 2000 steps: 0.33 to 0.67):
 # shown in the tables, left out of the summaries
 LOW_CEILING = ["item_diamond", "item_wood_pickaxe", "item_stone_pickaxe", "item_iron_pickaxe", "item_wood_sword",
                "item_stone_sword", "item_iron_sword", "health", "light", "ripe_plant"]  # fmt: skip

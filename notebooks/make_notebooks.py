@@ -1,4 +1,4 @@
-"""Write notebooks/E0.ipynb .. E3.ipynb from one template; they differ only in the configuration cell.
+"""Write notebooks/<ID>.ipynb from one template; the variants differ only in the configuration cell.
 
     python notebooks/make_notebooks.py
 """
@@ -8,26 +8,12 @@ from pathlib import Path
 import nbformat as nbf
 
 VARIANTS = {  # id: (control, title)
-    "E0": (None, "capacity check (autoencoder only)"),
-    "E1": ("E2", "prediction with the gradient through the target + SIGReg (A3 analogue)"),
-    "E2": ("E1", "prediction with a detached target + SIGReg (A4 analogue)"),
-    "E3": ("E0", "the Grace model: reconstruction first, then keep what the predictor foresees"),
+    "E0": (None, "capacity reference (autoencoder only)"),
 }
-STEPS = {  # id: the STEPS line's value
-    "E3": "16000  # stage 1 until SWITCH, stage 2 after it (about four epochs at K = 1, batch 512)",
-}
-SETTINGS = {  # id: (extra lines before CACHE, extra arguments of train.Config)
-    "E3": (
-        "SWITCH = 10000  # stage 2 starts here (fresh optimiser state, same rate); raise SWITCH and STEPS to extend stage 1\n"
-        "CHECKPOINTS = (0, 3000, SWITCH)  # and the last step\n",
-        "\n    switch=SWITCH, checkpoints=CHECKPOINTS,",
-    ),
-}
-
 INTRO = """# {id}: {title}
 
-Runs this variant end to end: data check, training, readouts, report, and level-2 planning at k > 1. The notebooks
-E0 to E3 share the code in `k2/` and differ only in the configuration cell (`notebooks/make_notebooks.py` writes them).
+Runs this variant end to end: data check, training, readouts, report. The notebooks share the code in `k2/` and
+differ only in the configuration cell (`notebooks/make_notebooks.py` writes them).
 
 **On a pod:** unzip `k2_pod.zip` into `/root` (the local disk, not `/workspace`; the zip holds the code and the cache
 built on the Mac), open this notebook with the pod's Python kernel and run the cells in order. The first cell installs
@@ -68,17 +54,18 @@ env["JAX_PLATFORMS"] = "cpu"
 run([sys.executable, "-m", "pytest", "-q", "tests"], cwd=ROOT, env=env)"""
 
 CONFIG = """VARIANT = "{id}"
-CONTROL = {control!r}  # the variant this run is read against (E0 is the reference for all)
-K = 1  # stride; step 5 of the order of work runs K = 8
+CONTROL = {control!r}  # the variant this run is read against
+K = 1  # the run's stride: E0 reconstructs single frames, so K only names the run (this continues runs/E0_k1)
+STRIDE = 4  # the level-2 stride the readouts measure in
 CONTEXT = 1  # C
-STEPS = {steps}
-{settings}CACHE = ROOT / "data/cache"  # the local disk
-RUNS = ROOT / "runs"  # on a pod: a folder on the volume, e.g. Path("/workspace/K2/runs")
-PLAN = K > 1  # level-2 planning, with the executor check (oracle subgoals)
+STEPS = 20000  # resumes from runs/E0_k1/last.pt (step 12000)
+CHECKPOINTS = (0, 1000, 3000, 8000, 12000, 16000)  # and the last step; files already there are kept
+CACHE = ROOT / "data/cache"  # the local disk
+RUNS = ROOT / "runs"  # the zip brings runs/E0_k1; copy it to the volume afterwards
 
 cfg = train.Config(
     variant=VARIANT, k=K, context=CONTEXT, steps=STEPS, cache=str(CACHE), out=str(RUNS / f"{{VARIANT}}_k{{K}}"),
-    control=str(RUNS / f"{{CONTROL}}_k{{K}}") if CONTROL else None,{args}
+    control=str(RUNS / f"{{CONTROL}}_k{{K}}") if CONTROL else None, checkpoints=CHECKPOINTS,
 )
 cfg"""
 
@@ -95,11 +82,7 @@ print(md.read_text() if md.exists() else f"No oracle table for k = {K}: run `pyt
 
 TRAIN = "train.train(cfg)"
 
-READ = "results = readouts.run_readouts(cfg.out)"
-
-PLANNING = """if PLAN:
-    env = {k: v for k, v in os.environ.items() if k != "LD_LIBRARY_PATH"}  # the image's CUDA path crashes JAX
-    subprocess.run([sys.executable, "-m", "k2.plan", cfg.out, "--split", "val", "--device", cfg.device], cwd=ROOT, env=env, check=True)"""
+READ = "results = readouts.run_readouts(cfg.out, stride=STRIDE)"
 
 REPORT = """from IPython.display import Markdown
 
@@ -117,16 +100,13 @@ def notebook(vid, control, title):
         md("## Tests\n\n`pytest` on the Mac-built code and a tiny synthetic cache: a failure here is an environment problem, not a result."),
         code(TESTS),
         md("## Configuration"),
-        code(CONFIG.format(id=vid, control=control, steps=STEPS.get(vid, "8000  # about two epochs at K = 1 (batch 512)"),
-                           settings=SETTINGS.get(vid, ("", ""))[0], args=SETTINGS.get(vid, ("", ""))[1])),
+        code(CONFIG.format(id=vid, control=control)),
         md("## Data check"),
         code(DATA),
         md("## Training"),
         code(TRAIN),
-        md("## Readouts\n\nA fresh decoder and a linear probe per checkpoint, kept against predictable, prediction, geometry."),
+        md("## Readouts\n\nA fresh decoder and a linear probe per checkpoint, prediction against copying, the raw latent's shape."),
         code(READ),
-        md("## Planning (K > 1)\n\nJAX on the CPU in a subprocess, without `LD_LIBRARY_PATH`."),
-        code(PLANNING),
         md("## Report"),
         code(REPORT),
     ]
