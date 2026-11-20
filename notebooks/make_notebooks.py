@@ -247,6 +247,36 @@ E1_RACE1 = """# the race: what z holds over the first steps, for the arms with a
 early = {n: c.out for n, c in runs().items() if n.startswith(("target", "warm-up"))}
 Markdown("\\n".join(f"### step {s}\\n" + report.resolution_table(early, "holds", str(s)) for s in (100, 300, 1000, 3000)))"""
 
+E1_STAGE1B_MD = """## Stage 1b: can tiles be coarsened? (linear, D = 256)
+
+At D = 64 no arm could represent tiles (stage 1), so coarse-graining against deletion was not testable. At D = 256 the
+linear ideal holds quadrants (R1). Two runs, 10000 steps each: the strongest selector of stage 1 (target gradient after
+a 1000-step warm-up, reconstruction, lam 10) and its reference (lam 0: a plain linear autoencoder of the same size; its
+predictor gets no gradient, so only its `holds` is read).
+
+**Read, fixed before the runs** (mobs against the reference):
+- **coarse-grain:** the mob tile clearly below the reference, mob quadrant and count in view close to it;
+- **delete:** mobs clearly below the reference at all three levels;
+- **no selection:** mobs about equal at all three levels.
+
+Ores and stations, being predictable, should stay or rise."""
+
+E1_STAGE1B = """RUNS_B = ROOT / "runs/E1_linear256"
+runs_b = {
+    "warm-up target + rec, lam 10": train.Config(variant="E1", arch="linear", k=K, latent=256, steps=10000, lr=1e-3,
+        warmup=100, lam=10.0, rec_weight=1.0, target_from=WARMUP, checkpoints=(0, 100, 300, 1000, 3000, 6000),
+        device="cpu", cache=str(CACHE), out=str(RUNS_B / "warm-up_target_and_rec_lam_10")),
+    "reference, lam 0": train.Config(variant="E1", arch="linear", k=K, latent=256, steps=10000, lr=1e-3,
+        warmup=100, lam=0.0, rec_weight=1.0, target_from=-1, checkpoints=(0, 100, 300, 1000, 3000, 6000),
+        device="cpu", cache=str(CACHE), out=str(RUNS_B / "reference_lam_0")),
+}  # fmt: skip
+for cfg in runs_b.values():  # about 8.5 minutes each on the Mac CPU (0.051 s per step, measured)
+    train.train(cfg)
+    readouts.run_resolution(cfg.out, "cpu", stride=K)
+labels_b = {n: c.out for n, c in runs_b.items()}
+Markdown("### holds\\n" + report.resolution_table(labels_b, "holds")
+         + "\\n### foresees (the reference's predictor is untrained)\\n" + report.resolution_table(labels_b, "foresees"))"""
+
 E1_STAGE2 = """RUN_STAGE2 = False  # only after stage 1 is read: set LAM2 from it, then True (GPU)
 LAM2 = 1.0
 RUNS2 = ROOT / "runs/E1_deep"  # on a pod: a folder on the volume
@@ -279,6 +309,8 @@ def e1_notebook():
         code(E1_READ1),
         md("## Stage 1: the race\n\nWhat disappears in the first steps, and whether it comes back."),
         code(E1_RACE1),
+        md(E1_STAGE1B_MD),
+        code(E1_STAGE1B),
         md("## Stage 2: deep (GPU)\n\nOnly after stage 1 is read; the warm-up arm only if stage 1 or the first deep checkpoints show a race."),
         code(E1_STAGE2),
     ]
